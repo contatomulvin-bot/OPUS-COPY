@@ -28,15 +28,9 @@ function parseOffset(value: unknown): number | null {
 function mimeTypeForAudio(audioPath: string): string {
   const ext = path.extname(audioPath).toLowerCase();
   const mimeTypes: Record<string, string> = {
-    '.wav': 'audio/wav',
-    '.mp3': 'audio/mp3',
-    '.m4a': 'audio/m4a',
-    '.aac': 'audio/aac',
-    '.ogg': 'audio/ogg',
-    '.opus': 'audio/opus',
-    '.flac': 'audio/flac',
-    '.aiff': 'audio/aiff',
-    '.webm': 'audio/webm',
+    '.wav': 'audio/wav', '.mp3': 'audio/mp3', '.m4a': 'audio/m4a',
+    '.aac': 'audio/aac', '.ogg': 'audio/ogg', '.opus': 'audio/opus',
+    '.flac': 'audio/flac', '.aiff': 'audio/aiff', '.webm': 'audio/webm',
     '.mpeg': 'audio/mpeg',
   };
   return mimeTypes[ext] || 'audio/wav';
@@ -62,69 +56,46 @@ export class GeminiTranscriptionProvider implements TranscriptionProvider {
   }
 
   async transcribe(audioPath: string, options?: { language?: string }): Promise<TranscriptionResult> {
-    if (!fs.existsSync(audioPath)) {
-      throw new Error(`AUDIO_NOT_FOUND: Arquivo de áudio não encontrado para transcrição: ${audioPath}`);
-    }
-
+    if (!fs.existsSync(audioPath)) throw new Error(`AUDIO_NOT_FOUND: Arquivo de áudio não encontrado para transcrição: ${audioPath}`);
     const stat = await fs.promises.stat(audioPath);
-    if (stat.size === 0) {
-      throw new Error('AUDIO_NOT_FOUND: O arquivo de áudio está vazio.');
-    }
+    if (stat.size === 0) throw new Error('AUDIO_NOT_FOUND: O arquivo de áudio está vazio.');
 
     const ai = this.getClient();
     const mimeType = mimeTypeForAudio(audioPath);
 
     try {
-      // Gemini recommends the Files API for recordings longer than a few seconds.
-      // This also avoids sending the complete audio as a huge base64 request.
       const audioFile = await ai.files.upload({
         file: audioPath,
-        config: { mime_type: mimeType },
+        config: { mimeType },
       });
 
-      if (!audioFile.uri) {
-        throw new Error('TRANSCRIPTION_FAILED: A API Gemini não retornou uma URI para o arquivo de áudio.');
-      }
+      if (!audioFile.uri) throw new Error('TRANSCRIPTION_FAILED: A API Gemini não retornou uma URI para o arquivo de áudio.');
 
       const languageCode = options?.language?.trim();
       const generationConfig: Record<string, unknown> = {
         transcription_config: {
           ...(languageCode ? { language_codes: [languageCode] } : {}),
-          mode: {
-            type: 'verbatim',
-            timestamp_granularities: ['word'],
-          },
+          mode: { type: 'verbatim', timestamp_granularities: ['word'] },
         },
       };
 
       const interaction: any = await ai.interactions.create({
         model: 'gemini-3.5-transcribe',
-        input: [
-          {
-            type: 'audio',
-            uri: audioFile.uri,
-            mime_type: audioFile.mimeType || mimeType,
-          },
-        ],
+        input: [{ type: 'audio', uri: audioFile.uri, mime_type: audioFile.mimeType || mimeType }],
         generation_config: generationConfig,
       });
 
       const fullText = String(interaction.output_text || '').trim();
       const annotations: GeminiWordAnnotation[] = [];
-
       for (const step of interaction.steps ?? []) {
         for (const content of step.content ?? []) {
           for (const annotation of content.annotations ?? []) {
-            if (annotation?.type === 'word_info') {
-              annotations.push(annotation as GeminiWordAnnotation);
-            }
+            if (annotation?.type === 'word_info') annotations.push(annotation as GeminiWordAnnotation);
           }
         }
       }
 
-      if (!fullText || annotations.length === 0) {
-        throw new Error('INVALID_TRANSCRIPTION: O Gemini não retornou texto com timestamps de palavras.');
-      }
+      if (!fullText || annotations.length === 0) throw new Error('INVALID_TRANSCRIPTION: O Gemini não retornou texto com timestamps de palavras.');
 
       const words: TranscriptWordDTO[] = [];
       for (const annotation of annotations) {
@@ -132,31 +103,18 @@ export class GeminiTranscriptionProvider implements TranscriptionProvider {
         const startTime = parseOffset(annotation.start_offset);
         const endTime = parseOffset(annotation.end_offset);
         if (!word || startTime === null || endTime === null || endTime <= startTime) continue;
-
-        words.push({
-          word,
-          startTime: Math.round(startTime * 100) / 100,
-          endTime: Math.round(endTime * 100) / 100,
-        });
+        words.push({ word, startTime: Math.round(startTime * 100) / 100, endTime: Math.round(endTime * 100) / 100 });
       }
+      if (words.length === 0) throw new Error('INVALID_TRANSCRIPTION: Nenhum timestamp de palavra válido foi retornado pelo Gemini.');
 
-      if (words.length === 0) {
-        throw new Error('INVALID_TRANSCRIPTION: Nenhum timestamp de palavra válido foi retornado pelo Gemini.');
-      }
-
-      // Build natural subtitle/cutting segments from the authoritative word timestamps.
-      // We split on sentence punctuation or long pauses, keeping segments compact.
       const segments: TranscriptSegmentDTO[] = [];
       let currentWords: TranscriptWordDTO[] = [];
-
       const flushSegment = () => {
-        if (currentWords.length === 0) return;
-        const startTime = currentWords[0].startTime;
-        const endTime = currentWords[currentWords.length - 1].endTime;
+        if (!currentWords.length) return;
         segments.push({
           id: `seg-${segments.length + 1}`,
-          startTime,
-          endTime,
+          startTime: currentWords[0].startTime,
+          endTime: currentWords[currentWords.length - 1].endTime,
           text: currentWords.map(word => word.word).join(' ').trim(),
           words: [...currentWords],
         });
@@ -167,46 +125,22 @@ export class GeminiTranscriptionProvider implements TranscriptionProvider {
         const word = words[i];
         const previous = words[i - 1];
         currentWords.push(word);
-
         const pause = previous ? word.startTime - previous.endTime : 0;
         const textEndsSentence = /[.!?…]$/.test(word.word);
         const segmentDuration = word.endTime - currentWords[0].startTime;
-
-        if (
-          textEndsSentence ||
-          pause >= 0.9 ||
-          segmentDuration >= 8
-        ) {
-          flushSegment();
-        }
+        if (textEndsSentence || pause >= 0.9 || segmentDuration >= 8) flushSegment();
       }
       flushSegment();
 
-      if (segments.length === 0) {
-        throw new Error('INVALID_TRANSCRIPTION: Não foi possível formar segmentos a partir dos timestamps.');
-      }
+      if (!segments.length) throw new Error('INVALID_TRANSCRIPTION: Não foi possível formar segmentos a partir dos timestamps.');
 
-      const result: TranscriptionResult = {
-        language: languageCode || 'pt',
-        text: fullText,
-        segments,
-      };
-
+      const result: TranscriptionResult = { language: languageCode || 'pt', text: fullText, segments };
       const validated = TranscriptionResultSchema.safeParse(result);
-      if (!validated.success) {
-        throw new Error(`INVALID_TRANSCRIPTION: Resultado incompatível com o esquema: ${validated.error.message}`);
-      }
-
+      if (!validated.success) throw new Error(`INVALID_TRANSCRIPTION: Resultado incompatível com o esquema: ${validated.error.message}`);
       return validated.data;
     } catch (err: any) {
       console.error('Error during Gemini transcription:', err);
-      if (
-        err.message?.startsWith('TRANSCRIPTION_') ||
-        err.message?.startsWith('AUDIO_') ||
-        err.message?.startsWith('INVALID_')
-      ) {
-        throw err;
-      }
+      if (/^(TRANSCRIPTION_|AUDIO_|INVALID_)/.test(err.message || '')) throw err;
       throw new Error(`TRANSCRIPTION_FAILED: ${err.message || 'Falha no processamento da transcrição'}`);
     }
   }
