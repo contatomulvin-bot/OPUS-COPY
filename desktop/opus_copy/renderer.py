@@ -32,7 +32,8 @@ def write_srt(transcript: dict, clip: ClipCandidate, path: Path) -> None:
             group_start = None
             group_end = None
             for word in words:
-                ws, we = float(word.get("start", start)), float(word.get("end", end))
+                ws = float(word.get("start", start))
+                we = float(word.get("end", end))
                 if we <= clip.start or ws >= clip.end:
                     continue
                 ws = max(ws, clip.start)
@@ -49,12 +50,17 @@ def write_srt(transcript: dict, clip: ClipCandidate, path: Path) -> None:
         else:
             text = str(segment.get("text", "")).strip()
             if text:
-                entries.append((max(start, clip.start) - clip.start, min(end, clip.end) - clip.start, text))
+                entries.append((
+                    max(start, clip.start) - clip.start,
+                    min(end, clip.end) - clip.start,
+                    text,
+                ))
 
     path.write_text(
         "\n\n".join(
             f"{i}\n{_srt_time(s)} --> {_srt_time(e)}\n{text}"
             for i, (s, e, text) in enumerate(entries, 1)
+            if e > s and text
         ) + "\n",
         encoding="utf-8",
     )
@@ -64,7 +70,17 @@ class ClipRenderer:
     def __init__(self) -> None:
         self.ffmpeg = require_executable("ffmpeg")
 
-    def render(self, source: Path, clip: ClipCandidate, transcript: dict, output: Path) -> Path:
+    def _render(
+        self,
+        source: Path,
+        clip: ClipCandidate,
+        transcript: dict,
+        output: Path,
+        source_offset: float,
+    ) -> Path:
+        if not source.exists() or source.stat().st_size == 0:
+            raise ToolError(f"Arquivo de entrada inválido: {source}")
+
         output.parent.mkdir(parents=True, exist_ok=True)
         srt = output.with_suffix(".srt")
         write_srt(transcript, clip, srt)
@@ -72,13 +88,14 @@ class ClipRenderer:
         subtitle_filter = f"subtitles='{_escape_subtitle_path(srt)}'"
         vf = f"crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920:flags=fast_bilinear,{subtitle_filter}"
         duration = max(0.1, clip.end - clip.start)
-        is_pretrimmed_section = source.name.lower().startswith("section_")
 
-        args = [self.ffmpeg, "-y"]
-        if not is_pretrimmed_section:
-            args.extend(["-ss", f"{clip.start:.3f}"])
-        args.extend(["-i", str(source), "-t", f"{duration:.3f}", "-vf", vf])
-        args.extend([
+        args = [
+            self.ffmpeg,
+            "-y",
+            "-ss", f"{source_offset:.3f}",
+            "-i", str(source),
+            "-t", f"{duration:.3f}",
+            "-vf", vf,
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-crf", "21",
@@ -86,10 +103,19 @@ class ClipRenderer:
             "-b:a", "128k",
             "-movflags", "+faststart",
             str(output),
-        ])
+        ]
         result = run_process(args, timeout=max(600, int(duration * 15)))
         if result.returncode != 0:
             raise ToolError(f"FFmpeg falhou ao renderizar o clip:\n{result.stderr.strip()}")
         if not output.exists() or output.stat().st_size == 0:
             raise ToolError("FFmpeg terminou sem criar o clip final.")
         return output
+
+    def render(self, source: Path, clip: ClipCandidate, transcript: dict, output: Path) -> Path:
+        return self._render(source, clip, transcript, output, source_offset=clip.start)
+
+    def render_section(self, source: Path, clip: ClipCandidate, transcript: dict, output: Path) -> Path:
+        # The downloaded section already starts at clip.start, so FFmpeg must
+        # read it from time zero while subtitles remain anchored to the original
+        # transcript timestamps through write_srt().
+        return self._render(source, clip, transcript, output, source_offset=0.0)
