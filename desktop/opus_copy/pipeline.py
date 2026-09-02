@@ -81,6 +81,28 @@ class Pipeline:
         clips = ViralAnalyzer().rank(transcript, max_clips=max_clips)
         if not clips:
             raise ToolError("A IA não encontrou clips válidos na transcrição.")
+
+        # Keep the generated YouTube metadata available even before the UI exposes it.
+        metadata_path = analysis_dir / "clip_metadata.json"
+        metadata_path.write_text(
+            json.dumps([
+                {
+                    "rank": index,
+                    "score": round(clip.score, 1),
+                    "title": clip.title,
+                    "hook": clip.hook,
+                    "reason": clip.reason,
+                    "category": clip.category,
+                    "keywords": list(clip.keywords),
+                    "scores": clip.scores or {},
+                    "start": round(clip.start, 3),
+                    "end": round(clip.end, 3),
+                }
+                for index, clip in enumerate(clips, 1)
+            ], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
         hook_summary = " · ".join(
             f"{c.score:.0f}/100" + (f" · {', '.join(c.keywords[:3])}" if c.keywords else "")
             for c in clips
