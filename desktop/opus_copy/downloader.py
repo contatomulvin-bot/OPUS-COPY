@@ -46,6 +46,81 @@ class YouTubeDownloader:
         )
         return any(marker in lowered for marker in markers)
 
+    @staticmethod
+    def _windows_browser_profiles() -> list[tuple[str, str]]:
+        """Find real Chromium browser profiles on Windows.
+
+        yt-dlp supports an explicit profile path in --cookies-from-browser.
+        Supplying that path is more reliable than assuming the default browser
+        data directory is present or using a browser name alone.
+        """
+        local = Path(os.getenv("LOCALAPPDATA", ""))
+        roaming = Path(os.getenv("APPDATA", ""))
+        candidates = (
+            ("brave", local / "BraveSoftware" / "Brave-Browser" / "User Data"),
+            ("chrome", local / "Google" / "Chrome" / "User Data"),
+            ("edge", local / "Microsoft" / "Edge" / "User Data"),
+            ("chromium", local / "Chromium" / "User Data"),
+            ("vivaldi", local / "Vivaldi" / "User Data"),
+            ("opera", roaming / "Opera Software" / "Opera Stable"),
+        )
+
+        found: list[tuple[str, str]] = []
+        for browser, root in candidates:
+            if not root.is_dir():
+                continue
+
+            # Chromium stores cookies in the profile directory. Newer builds
+            # normally use Network/Cookies; older builds may use Cookies.
+            profiles: list[Path] = []
+            for child in root.iterdir():
+                if not child.is_dir():
+                    continue
+                if (
+                    (child / "Network" / "Cookies").is_file()
+                    or (child / "Cookies").is_file()
+                ):
+                    profiles.append(child)
+
+            # Some browsers may point directly at a profile-like directory.
+            if not profiles and (
+                (root / "Network" / "Cookies").is_file()
+                or (root / "Cookies").is_file()
+            ):
+                profiles.append(root)
+
+            # Prefer Default first, then Profile N and any remaining profile.
+            profiles.sort(key=lambda p: (p.name != "Default", p.name.lower()))
+            for profile in profiles:
+                found.append((browser, str(profile)))
+
+        # De-duplicate while keeping deterministic order.
+        unique: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for item in found:
+            if item not in seen:
+                seen.add(item)
+                unique.append(item)
+        return unique
+
+    @staticmethod
+    def _browser_attempts() -> list[tuple[str, str]]:
+        configured = os.getenv("OPUS_COPY_YOUTUBE_COOKIES_BROWSER", "").strip()
+        if not configured:
+            return YouTubeDownloader._windows_browser_profiles()
+
+        attempts: list[tuple[str, str]] = []
+        for raw in configured.split(","):
+            value = raw.strip()
+            if not value:
+                continue
+            if ":" in value:
+                browser, profile = value.split(":", 1)
+                attempts.append((browser.strip(), profile.strip()))
+            else:
+                attempts.append((value, ""))
+        return attempts
+
     def _run_download(
         self,
         url: str,
@@ -102,20 +177,22 @@ class YouTubeDownloader:
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Browser cookie extraction is optional. A browser that is not
-        # installed/configured must not abort the entire YouTube download.
-        configured = os.getenv("OPUS_COPY_YOUTUBE_COOKIES_BROWSER", "").strip()
-        if configured:
-            browsers = [b.strip() for b in configured.split(",") if b.strip()]
-        else:
-            browsers = ["brave", "chrome", "edge"]
+        # Always try a clean guest request first. If YouTube blocks it, use
+        # actual browser profiles discovered on this Windows installation.
+        browser_attempts = self._browser_attempts()
+        attempts: list[tuple[str, str | None]] = [("sem cookies", None)]
+        attempts.extend(
+            (
+                f"cookies do {browser} ({profile})" if profile else f"cookies do {browser}",
+                f"{browser}:{profile}" if profile else browser,
+            )
+            for browser, profile in browser_attempts
+        )
 
-        attempts: list[str | None] = [None, *browsers]
         errors: list[str] = []
-
-        for browser in attempts:
+        for label, browser_arg in attempts:
             self._remove_stale_outputs(output_dir)
-            result = self._run_download(clean_url, output_dir, browser)
+            result = self._run_download(clean_url, output_dir, browser_arg)
             combined = "\n".join(
                 part for part in (result.stdout, result.stderr) if part
             ).strip()
@@ -127,15 +204,11 @@ class YouTubeDownloader:
                 errors.append("yt-dlp terminou sem produzir um arquivo de vídeo.")
                 continue
 
-            if browser is not None and self._is_cookie_database_error(combined):
-                errors.append(
-                    f"Cookies do {browser} não estão disponíveis neste PC; "
-                    "essa tentativa foi ignorada."
-                )
+            if browser_arg is not None and self._is_cookie_database_error(combined):
+                errors.append(f"{label}: banco de cookies não pôde ser lido.")
                 continue
 
             if self._is_blocked(combined):
-                label = "sem cookies" if browser is None else f"cookies do {browser}"
                 errors.append(f"YouTube bloqueou a tentativa com {label}.")
                 continue
 
@@ -147,10 +220,12 @@ class YouTubeDownloader:
             )
 
         details = "\n".join(errors)
+        detected = ", ".join(label for label, _ in attempts[1:]) or "nenhum perfil de navegador"
         raise ToolError(
             "Não foi possível baixar este vídeo pelo YouTube.\n\n"
             f"{details}\n\n"
-            "Se o YouTube estiver exigindo login/anti-bot, feche completamente "
-            "o Brave/Chrome/Edge e tente novamente. O OPUS-COPY não precisa que "
-            "você envie seu arquivo de cookies."
+            f"Perfis de navegador detectados: {detected}.\n"
+            "O OPUS-COPY tenta automaticamente os perfis encontrados no Windows. "
+            "Se todos forem bloqueados, o próximo passo é configurar um PO Token "
+            "Provider para o yt-dlp, em vez de ficar trocando flags aleatórias."
         )
