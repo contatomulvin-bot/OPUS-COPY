@@ -9,7 +9,8 @@ datas = [(str(ROOT / "assets"), "assets")]
 binaries = []
 hiddenimports = []
 
-for package in ("whisperx", "torch", "torchaudio", "faster_whisper", "ctranslate2", "pyannote.audio", "google.genai"):
+# Bundle only the runtimes actually used by the desktop app.
+for package in ("torch", "torchaudio", "faster_whisper", "ctranslate2", "google.genai"):
     try:
         d, b, h = collect_all(package)
         datas.extend(d)
@@ -27,7 +28,7 @@ analysis = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter"],
+    excludes=["tkinter", "whisperx", "pyannote.audio"],
     noarchive=False,
 )
 
