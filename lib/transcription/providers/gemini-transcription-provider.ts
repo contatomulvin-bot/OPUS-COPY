@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import fs from 'fs';
 import path from 'path';
 import {
@@ -9,30 +9,56 @@ import {
   TranscriptionResultSchema,
 } from '../transcription-provider';
 
+interface GeminiWordAnnotation {
+  type?: string;
+  text?: string;
+  start_offset?: string;
+  end_offset?: string;
+  speaker?: string;
+}
+
+function parseOffset(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const match = value.trim().match(/^([0-9]+(?:\.[0-9]+)?)s$/i);
+  if (!match) return null;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
+
+function mimeTypeForAudio(audioPath: string): string {
+  const ext = path.extname(audioPath).toLowerCase();
+  const mimeTypes: Record<string, string> = {
+    '.wav': 'audio/wav',
+    '.mp3': 'audio/mp3',
+    '.m4a': 'audio/m4a',
+    '.aac': 'audio/aac',
+    '.ogg': 'audio/ogg',
+    '.opus': 'audio/opus',
+    '.flac': 'audio/flac',
+    '.aiff': 'audio/aiff',
+    '.webm': 'audio/webm',
+    '.mpeg': 'audio/mpeg',
+  };
+  return mimeTypes[ext] || 'audio/wav';
+}
+
 export class GeminiTranscriptionProvider implements TranscriptionProvider {
-  name = 'Gemini Audio Transcriber';
+  name = 'Gemini 3.5 Transcribe';
   private client: GoogleGenAI | null = null;
 
   private getClient(): GoogleGenAI {
     if (!this.client) {
-      const apiKey = process.env.GEMINI_API_KEY;
+      const apiKey = process.env.GEMINI_API_KEY?.trim();
       if (!apiKey) {
         throw new Error('TRANSCRIPTION_UNAVAILABLE: GEMINI_API_KEY não foi configurada no ambiente.');
       }
-      this.client = new GoogleGenAI({
-        apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      });
+      this.client = new GoogleGenAI({ apiKey });
     }
     return this.client;
   }
 
   async isAvailable(): Promise<boolean> {
-    return !!process.env.GEMINI_API_KEY;
+    return Boolean(process.env.GEMINI_API_KEY?.trim());
   }
 
   async transcribe(audioPath: string, options?: { language?: string }): Promise<TranscriptionResult> {
@@ -46,205 +72,139 @@ export class GeminiTranscriptionProvider implements TranscriptionProvider {
     }
 
     const ai = this.getClient();
-    const audioBuffer = await fs.promises.readFile(audioPath);
-    const base64Audio = audioBuffer.toString('base64');
-
-    // Detect MIME type based on extension
-    const ext = path.extname(audioPath).toLowerCase();
-    const mimeType = ext === '.wav' ? 'audio/wav' : ext === '.mp3' ? 'audio/mp3' : 'audio/wav';
-
-    const preferredLang = options?.language || 'pt';
-
-    const systemInstruction = `Você é um motor de transcrição de áudio profissional especializado em pontuação e timestamps exatos para legendas e cortes de vídeo.
-Instruções:
-1. Transcreva com fidelidade absoluta tudo o que é falado no áudio no idioma ${preferredLang} (ou idioma original detectado).
-2. Não resuma, não parafraseie, não omita palavras.
-3. Divida a fala em segmentos naturais (frases ou orações lógicas de 2 a 8 segundos).
-4. Para cada segmento, determine startTime e endTime precisos em segundos (float, ex: 0.0, 3.42).
-5. Para cada segmento, forneça a lista de palavras (words) com o timestamp individual de início e término de cada palavra.
-6. Os timestamps de words devem estar contidos dentro do startTime e endTime do respectivo segmento.
-7. Garanta que todos os números de tempo sejam válidos, finitos, não-negativos e ordenados cronologicamente.`;
-
-    const prompt = `Transcreva o arquivo de áudio anexado com timestamps de segmentos e palavras. Retorne o resultado estritamente no esquema JSON solicitado.`;
+    const mimeType = mimeTypeForAudio(audioPath);
 
     try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.7-flash',
-        contents: [
-          {
-            inlineData: {
-              mimeType,
-              data: base64Audio,
-            },
-          },
-          {
-            text: prompt,
-          },
-        ],
-        config: {
-          systemInstruction,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              language: {
-                type: Type.STRING,
-                description: 'Código do idioma detectado (ex: pt, en, es)',
-              },
-              fullText: {
-                type: Type.STRING,
-                description: 'Transcrição completa contínua do áudio',
-              },
-              segments: {
-                type: Type.ARRAY,
-                description: 'Segmentos de áudio com timestamps precisos em segundos',
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    startTime: {
-                      type: Type.NUMBER,
-                      description: 'Início do segmento em segundos (float >= 0)',
-                    },
-                    endTime: {
-                      type: Type.NUMBER,
-                      description: 'Fim do segmento em segundos (float > startTime)',
-                    },
-                    text: {
-                      type: Type.STRING,
-                      description: 'Texto falado no intervalo',
-                    },
-                    words: {
-                      type: Type.ARRAY,
-                      description: 'Palavras individuais com seus timestamps de fala',
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          word: {
-                            type: Type.STRING,
-                            description: 'A palavra individual falada',
-                          },
-                          startTime: {
-                            type: Type.NUMBER,
-                            description: 'Segundo de início da pronúncia da palavra',
-                          },
-                          endTime: {
-                            type: Type.NUMBER,
-                            description: 'Segundo de término da pronúncia da palavra',
-                          },
-                        },
-                        required: ['word', 'startTime', 'endTime'],
-                      },
-                    },
-                  },
-                  required: ['startTime', 'endTime', 'text'],
-                },
-              },
-            },
-            required: ['language', 'fullText', 'segments'],
-          },
-        },
+      // Gemini recommends the Files API for recordings longer than a few seconds.
+      // This also avoids sending the complete audio as a huge base64 request.
+      const audioFile = await ai.files.upload({
+        file: audioPath,
+        config: { mime_type: mimeType },
       });
 
-      const rawJson = response.text?.trim() || '{}';
-      let parsed: any;
-      try {
-        parsed = JSON.parse(rawJson);
-      } catch (jsonErr: any) {
-        throw new Error(`INVALID_TRANSCRIPTION: Falha ao interpretar JSON retornado: ${jsonErr.message}`);
+      if (!audioFile.uri) {
+        throw new Error('TRANSCRIPTION_FAILED: A API Gemini não retornou uma URI para o arquivo de áudio.');
       }
 
-      if (!parsed || !Array.isArray(parsed.segments) || parsed.segments.length === 0) {
-        throw new Error('INVALID_TRANSCRIPTION: Nenhum segmento de fala detectado no áudio.');
-      }
+      const languageCode = options?.language?.trim();
+      const generationConfig: Record<string, unknown> = {
+        transcription_config: {
+          ...(languageCode ? { language_codes: [languageCode] } : {}),
+          mode: {
+            type: 'verbatim',
+            timestamp_granularities: ['word'],
+          },
+        },
+      };
 
-      // Process and sanitize segments & words
-      let lastEndTime = 0;
-      const rawSegments: TranscriptSegmentDTO[] = [];
+      const interaction: any = await ai.interactions.create({
+        model: 'gemini-3.5-transcribe',
+        input: [
+          {
+            type: 'audio',
+            uri: audioFile.uri,
+            mime_type: audioFile.mimeType || mimeType,
+          },
+        ],
+        generation_config: generationConfig,
+      });
 
-      for (let i = 0; i < parsed.segments.length; i++) {
-        const seg = parsed.segments[i];
-        const segText = String(seg.text || '').trim();
-        if (!segText) continue;
+      const fullText = String(interaction.output_text || '').trim();
+      const annotations: GeminiWordAnnotation[] = [];
 
-        let start = Number(seg.startTime);
-        let end = Number(seg.endTime);
-
-        if (isNaN(start) || !isFinite(start) || start < 0) {
-          start = lastEndTime;
-        }
-        if (isNaN(end) || !isFinite(end) || end <= start) {
-          // Estimate approx duration based on words if available, else 2 seconds
-          end = start + Math.max(1.0, segText.split(/\s+/).length * 0.35);
-        }
-
-        lastEndTime = end;
-
-        // Process words if provided
-        const words: TranscriptWordDTO[] = [];
-        if (Array.isArray(seg.words) && seg.words.length > 0) {
-          let wordLastEnd = start;
-          for (let w = 0; w < seg.words.length; w++) {
-            const rawWord = seg.words[w];
-            const wordText = String(rawWord.word || '').trim();
-            if (!wordText) continue;
-
-            let wStart = Number(rawWord.startTime);
-            let wEnd = Number(rawWord.endTime);
-
-            if (isNaN(wStart) || !isFinite(wStart) || wStart < start) {
-              wStart = wordLastEnd;
+      for (const step of interaction.steps ?? []) {
+        for (const content of step.content ?? []) {
+          for (const annotation of content.annotations ?? []) {
+            if (annotation?.type === 'word_info') {
+              annotations.push(annotation as GeminiWordAnnotation);
             }
-            if (isNaN(wEnd) || !isFinite(wEnd) || wEnd <= wStart || wEnd > end + 1.0) {
-              wEnd = Math.min(end, wStart + 0.3);
-              if (wEnd <= wStart) wEnd = wStart + 0.2;
-            }
-
-            wordLastEnd = wEnd;
-            words.push({
-              word: wordText,
-              startTime: Math.round(wStart * 100) / 100,
-              endTime: Math.round(wEnd * 100) / 100,
-            });
           }
         }
+      }
 
-        rawSegments.push({
-          id: `seg-${i + 1}`,
-          startTime: Math.round(start * 100) / 100,
-          endTime: Math.round(end * 100) / 100,
-          text: segText,
-          words: words.length > 0 ? words : undefined,
+      if (!fullText || annotations.length === 0) {
+        throw new Error('INVALID_TRANSCRIPTION: O Gemini não retornou texto com timestamps de palavras.');
+      }
+
+      const words: TranscriptWordDTO[] = [];
+      for (const annotation of annotations) {
+        const word = String(annotation.text || '').trim();
+        const startTime = parseOffset(annotation.start_offset);
+        const endTime = parseOffset(annotation.end_offset);
+        if (!word || startTime === null || endTime === null || endTime <= startTime) continue;
+
+        words.push({
+          word,
+          startTime: Math.round(startTime * 100) / 100,
+          endTime: Math.round(endTime * 100) / 100,
         });
       }
 
-      // Sort segments chronologically
-      rawSegments.sort((a, b) => a.startTime - b.startTime);
-
-      if (rawSegments.length === 0) {
-        throw new Error('INVALID_TRANSCRIPTION: Não foi possível extrair segmentos legíveis do áudio.');
+      if (words.length === 0) {
+        throw new Error('INVALID_TRANSCRIPTION: Nenhum timestamp de palavra válido foi retornado pelo Gemini.');
       }
 
-      const fullText = String(parsed.fullText || rawSegments.map(s => s.text).join(' ')).trim();
-      const detectedLang = String(parsed.language || preferredLang).toLowerCase();
+      // Build natural subtitle/cutting segments from the authoritative word timestamps.
+      // We split on sentence punctuation or long pauses, keeping segments compact.
+      const segments: TranscriptSegmentDTO[] = [];
+      let currentWords: TranscriptWordDTO[] = [];
 
-      const candidateResult: TranscriptionResult = {
-        language: detectedLang,
-        text: fullText,
-        segments: rawSegments,
+      const flushSegment = () => {
+        if (currentWords.length === 0) return;
+        const startTime = currentWords[0].startTime;
+        const endTime = currentWords[currentWords.length - 1].endTime;
+        segments.push({
+          id: `seg-${segments.length + 1}`,
+          startTime,
+          endTime,
+          text: currentWords.map(word => word.word).join(' ').trim(),
+          words: [...currentWords],
+        });
+        currentWords = [];
       };
 
-      // Strict validation via Zod
-      const validated = TranscriptionResultSchema.safeParse(candidateResult);
+      for (let i = 0; i < words.length; i++) {
+        const word = words[i];
+        const previous = words[i - 1];
+        currentWords.push(word);
+
+        const pause = previous ? word.startTime - previous.endTime : 0;
+        const textEndsSentence = /[.!?…]$/.test(word.word);
+        const segmentDuration = word.endTime - currentWords[0].startTime;
+
+        if (
+          textEndsSentence ||
+          pause >= 0.9 ||
+          segmentDuration >= 8
+        ) {
+          flushSegment();
+        }
+      }
+      flushSegment();
+
+      if (segments.length === 0) {
+        throw new Error('INVALID_TRANSCRIPTION: Não foi possível formar segmentos a partir dos timestamps.');
+      }
+
+      const result: TranscriptionResult = {
+        language: languageCode || 'pt',
+        text: fullText,
+        segments,
+      };
+
+      const validated = TranscriptionResultSchema.safeParse(result);
       if (!validated.success) {
-        console.warn('Transcription validation warning:', validated.error.format());
-        // If minor validation error, still return sanitized candidate if valid
-        return candidateResult;
+        throw new Error(`INVALID_TRANSCRIPTION: Resultado incompatível com o esquema: ${validated.error.message}`);
       }
 
       return validated.data;
     } catch (err: any) {
       console.error('Error during Gemini transcription:', err);
-      if (err.message?.startsWith('TRANSCRIPTION_') || err.message?.startsWith('AUDIO_') || err.message?.startsWith('INVALID_')) {
+      if (
+        err.message?.startsWith('TRANSCRIPTION_') ||
+        err.message?.startsWith('AUDIO_') ||
+        err.message?.startsWith('INVALID_')
+      ) {
         throw err;
       }
       throw new Error(`TRANSCRIPTION_FAILED: ${err.message || 'Falha no processamento da transcrição'}`);
