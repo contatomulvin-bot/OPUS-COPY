@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -10,14 +11,28 @@ class ToolError(RuntimeError):
     pass
 
 
+def _bundle_dir() -> Path:
+    """Directory containing bundled runtime binaries when running a PyInstaller build."""
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+
+
 def find_executable(name: str) -> str | None:
+    # Prefer binaries shipped with the packaged application.
+    local_names = [name]
+    if os.name == "nt" and not name.lower().endswith(".exe"):
+        local_names.append(f"{name}.exe")
+    for candidate in local_names:
+        for folder in (_bundle_dir() / "runtime", _bundle_dir()):
+            path = folder / candidate
+            if path.is_file():
+                return str(path)
     return shutil.which(name)
 
 
 def require_executable(name: str) -> str:
     path = find_executable(name)
     if not path:
-        raise ToolError(f"{name} não encontrado no PATH.")
+        raise ToolError(f"{name} não encontrado. Instale-o ou coloque-o na pasta runtime do OPUS-COPY.")
     return path
 
 
