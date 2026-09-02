@@ -41,13 +41,46 @@ export const api = {
   async transcribeVideo(videoId: string, options?: { forceRetranscribe?: boolean; language?: string }): Promise<{ message: string; transcript: any }> { const res = await fetch(`/api/videos/${videoId}/transcribe`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(options || {}) }); return handleResponse(res); },
   async getTranscript(videoId: string): Promise<any> { const res = await fetch(`/api/videos/${videoId}/transcript`); return handleResponse(res); },
   async getVideoStatus(videoId: string): Promise<any> { const res = await fetch(`/api/videos/${videoId}/status`); return handleResponse(res); },
-  async getJob(jobId: string): Promise<JobProgress> { const res = await fetch(`/api/jobs/${jobId}`); return handleResponse<JobProgress>(res); },
+  async getJob(jobId: string): Promise<JobProgress> {
+    if (jobId.startsWith('render:')) {
+      const renderId = jobId.slice('render:'.length);
+      const render = await this.getRender(renderId);
+      return {
+        jobId,
+        status: render.status,
+        progress: render.progress || 0,
+        currentStep: render.status === 'COMPLETED' || render.status === 'FAILED' ? 'COMPLETED' : 'RENDER',
+        stepLabel: render.currentStep || 'Renderizando vídeo...',
+        error: render.errorMessage,
+        updatedAt: new Date(render.updatedAt),
+        result: render,
+      };
+    }
+    const res = await fetch(`/api/jobs/${jobId}`); return handleResponse<JobProgress>(res);
+  },
   async analyzeVideo(videoId: string, options?: { force?: boolean; maxCandidates?: number; minClipDuration?: number; maxClipDuration?: number }): Promise<{ message: string; cached: boolean; count: number; clips: Clip[] }> { const res = await fetch(`/api/videos/${videoId}/analyze`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(options || {}) }); return handleResponse(res); },
   async getVideoClips(videoId: string): Promise<Clip[]> { const res = await fetch(`/api/videos/${videoId}/clips`); return handleResponse(res); },
   async toggleSelectClip(clipId: string): Promise<Clip> { const res = await fetch(`/api/clips/${clipId}/toggle-select`, { method: 'POST' }); return handleResponse(res); },
   async updateClip(clipId: string, data: { startTime?: number; endTime?: number; title?: string; hook?: string; description?: string; status?: string }): Promise<Clip> { const res = await fetch(`/api/clips/${clipId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); return handleResponse(res); },
-  async renderClip(clipId: string, options?: { subtitleStyle?: 'CLEAN' | 'BOLD' | 'DYNAMIC'; subtitlesEnabled?: boolean; reframeMode?: 'CENTER_CROP' | 'AUTO_TRACK' | 'FIT_BLUR' }): Promise<{ message: string; render: Render }> { const res = await fetch(`/api/clips/${clipId}/render`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(options || {}) }); return handleResponse(res); },
-  async getRender(renderId: string): Promise<Render> { const res = await fetch(`/api/renders/${renderId}`); return handleResponse(res); },
+  async renderClip(clipId: string, options?: { subtitleStyle?: 'CLEAN' | 'BOLD' | 'DYNAMIC'; subtitlesEnabled?: boolean; reframeMode?: 'CENTER_CROP' | 'AUTO_TRACK' | 'FIT_BLUR' }): Promise<{ message: string; render: Render; renderId: string; job: JobProgress }> {
+    const res = await fetch(`/api/clips/${clipId}/render`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(options || {}) });
+    const data = await handleResponse<{ message: string; render: Render }>(res);
+    return {
+      ...data,
+      renderId: data.render.id,
+      job: {
+        jobId: `render:${data.render.id}`,
+        status: data.render.status,
+        progress: data.render.progress || 0,
+        currentStep: data.render.status === 'COMPLETED' || data.render.status === 'FAILED' ? 'COMPLETED' : 'RENDER',
+        stepLabel: data.render.currentStep || 'Renderizando vídeo...',
+        error: data.render.errorMessage,
+        updatedAt: new Date(data.render.updatedAt),
+        result: data.render,
+      },
+    };
+  },
+  async getRender(renderId: string): Promise<Render> { const res = await fetch(`/api/renders/${renderId}`); return handleResponse<Render>(res); },
   async retryRender(renderId: string): Promise<{ message: string; render: Render }> { const res = await fetch(`/api/renders/${renderId}/retry`, { method: 'POST' }); return handleResponse(res); },
   async getRecentShorts(limit = 6): Promise<Render[]> { const res = await fetch(`/api/renders/recent?limit=${limit}`); return handleResponse(res); },
   async batchRenderSelected(projectId: string, options?: { subtitleStyle?: 'CLEAN' | 'BOLD' | 'DYNAMIC'; subtitlesEnabled?: boolean; reframeMode?: 'CENTER_CROP' | 'AUTO_TRACK' | 'FIT_BLUR' }): Promise<{ totalSelected: number; queued: number; message: string; renders: Render[] }> { const res = await fetch(`/api/projects/${projectId}/render-selected`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(options || {}) }); return handleResponse(res); },
