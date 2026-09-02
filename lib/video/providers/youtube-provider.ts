@@ -29,8 +29,6 @@ export class YouTubeProvider {
   constructor(storage: StorageProvider) {
     this.storage = storage;
 
-    // On Windows, do not select the repository's extensionless Unix binary.
-    // Prefer a Windows local binary when present, otherwise use yt-dlp from PATH.
     const isWindows = process.platform === 'win32';
     const localBin = path.resolve(process.cwd(), 'bin', isWindows ? 'yt-dlp.exe' : 'yt-dlp');
 
@@ -70,7 +68,6 @@ export class YouTubeProvider {
       throw new Error(availability.reason || 'YOUTUBE_PROCESSING_UNAVAILABLE');
     }
 
-    // Pass safe array of arguments, never raw shell concatenation
     const args = [
       '--dump-single-json',
       '--no-warnings',
@@ -116,9 +113,10 @@ export class YouTubeProvider {
 
     const outputTemplate = path.join(targetDir, `${videoId}.%(ext)s`);
 
-    // Safe isolated arguments array
+    // Do not force a specific YouTube format. The installed yt-dlp version's
+    // default selector is more resilient to YouTube's changing format access
+    // rules and was verified manually in the user's environment.
     const args = [
-      '-f', 'bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best',
       '--merge-output-format', 'mp4',
       '--no-playlist',
       '--no-warnings',
@@ -130,7 +128,6 @@ export class YouTubeProvider {
     try {
       await execFileAsync(this.ytDlpPath, args, { timeout: 180000 });
 
-      // Determine downloaded file path
       let downloadedFile = targetPath;
       if (!fs.existsSync(targetPath)) {
         const files = await fs.promises.readdir(targetDir);
@@ -143,7 +140,6 @@ export class YouTubeProvider {
 
       const stat = await fs.promises.stat(downloadedFile);
 
-      // Read metadata from info.json if available
       let info: YouTubeVideoInfo = {
         title: 'Vídeo do YouTube',
         duration: 0,
