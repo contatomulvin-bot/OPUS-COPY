@@ -48,12 +48,7 @@ class YouTubeDownloader:
 
     @staticmethod
     def _windows_browser_profiles() -> list[tuple[str, str]]:
-        """Find real Chromium browser profiles on Windows.
-
-        yt-dlp supports an explicit profile path in --cookies-from-browser.
-        Supplying that path is more reliable than assuming the default browser
-        data directory is present or using a browser name alone.
-        """
+        """Find real Chromium browser profiles on Windows."""
         local = Path(os.getenv("LOCALAPPDATA", ""))
         roaming = Path(os.getenv("APPDATA", ""))
         candidates = (
@@ -69,11 +64,12 @@ class YouTubeDownloader:
         for browser, root in candidates:
             if not root.is_dir():
                 continue
-
-            # Chromium stores cookies in the profile directory. Newer builds
-            # normally use Network/Cookies; older builds may use Cookies.
             profiles: list[Path] = []
-            for child in root.iterdir():
+            try:
+                children = list(root.iterdir())
+            except OSError:
+                continue
+            for child in children:
                 if not child.is_dir():
                     continue
                 if (
@@ -82,19 +78,15 @@ class YouTubeDownloader:
                 ):
                     profiles.append(child)
 
-            # Some browsers may point directly at a profile-like directory.
             if not profiles and (
                 (root / "Network" / "Cookies").is_file()
                 or (root / "Cookies").is_file()
             ):
                 profiles.append(root)
 
-            # Prefer Default first, then Profile N and any remaining profile.
             profiles.sort(key=lambda p: (p.name != "Default", p.name.lower()))
-            for profile in profiles:
-                found.append((browser, str(profile)))
+            found.extend((browser, str(profile)) for profile in profiles)
 
-        # De-duplicate while keeping deterministic order.
         unique: list[tuple[str, str]] = []
         seen: set[tuple[str, str]] = set()
         for item in found:
@@ -121,15 +113,25 @@ class YouTubeDownloader:
                 attempts.append((value, ""))
         return attempts
 
+    @staticmethod
+    def _pot_provider_home() -> Path | None:
+        """Return the local bgutil provider server directory when installed."""
+        configured = os.getenv("OPUS_COPY_POT_PROVIDER_HOME", "").strip()
+        if configured:
+            root = Path(configured).expanduser()
+        else:
+            root = Path(os.getenv("USERPROFILE", "")) / "bgutil-ytdlp-pot-provider"
+        server = root / "server"
+        if (server / "package.json").is_file() and (server / "src").is_dir():
+            return server
+        return None
+
     def _run_download(
         self,
         url: str,
         output_dir: Path,
         cookies_browser: str | None = None,
     ):
-        # Do not force a YouTube client here. yt-dlp can select the available
-        # client and stream formats itself; forcing clients can make some
-        # videos fail because of client-specific restrictions/tokens.
         template = str(output_dir / "source.%(ext)s")
         args = [
             self.executable,
@@ -140,6 +142,12 @@ class YouTubeDownloader:
             "--merge-output-format", "mp4",
             "-o", template,
         ]
+        provider_home = self._pot_provider_home()
+        if provider_home:
+            args.extend([
+                "--extractor-args",
+                f"youtubepot-bgutilscript:server_home={provider_home}",
+            ])
         if cookies_browser:
             args.extend(["--cookies-from-browser", cookies_browser])
         args.append(url)
@@ -176,9 +184,6 @@ class YouTubeDownloader:
             raise ToolError("Informe uma URL completa do YouTube (https://...).")
 
         output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Always try a clean guest request first. If YouTube blocks it, use
-        # actual browser profiles discovered on this Windows installation.
         browser_attempts = self._browser_attempts()
         attempts: list[tuple[str, str | None]] = [("sem cookies", None)]
         attempts.extend(
@@ -212,8 +217,6 @@ class YouTubeDownloader:
                 errors.append(f"YouTube bloqueou a tentativa com {label}.")
                 continue
 
-            # Non-authentication errors are not helped by trying other browser
-            # sessions, so expose the real yt-dlp diagnostic immediately.
             raise ToolError(
                 "Falha no download do YouTube.\n\n"
                 f"{combined or 'yt-dlp encerrou sem informar o erro.'}"
@@ -221,11 +224,15 @@ class YouTubeDownloader:
 
         details = "\n".join(errors)
         detected = ", ".join(label for label, _ in attempts[1:]) or "nenhum perfil de navegador"
+        provider = self._pot_provider_home()
+        provider_text = (
+            f"PO Token Provider detectado em: {provider}\n"
+            if provider else
+            "PO Token Provider não foi encontrado neste PC. Execute .\\desktop\\setup.ps1 para instalá-lo.\n"
+        )
         raise ToolError(
             "Não foi possível baixar este vídeo pelo YouTube.\n\n"
             f"{details}\n\n"
             f"Perfis de navegador detectados: {detected}.\n"
-            "O OPUS-COPY tenta automaticamente os perfis encontrados no Windows. "
-            "Se todos forem bloqueados, o próximo passo é configurar um PO Token "
-            "Provider para o yt-dlp, em vez de ficar trocando flags aleatórias."
+            f"{provider_text}"
         )
