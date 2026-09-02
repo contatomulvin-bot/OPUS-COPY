@@ -49,35 +49,38 @@ class Pipeline:
         if language not in {"pt", "en", "es", "fr", "de", "it", "ja", "ko", "zh", "ru"}:
             raise ToolError(f"Idioma de transcrição não suportado: {language}")
 
-        def report(message: str):
+        def report(message: str, percent: int | None = None) -> None:
             if progress:
-                progress(message)
+                try:
+                    progress(message, percent)
+                except TypeError:
+                    progress(message)
 
         downloader = YouTubeDownloader()
         analysis_dir = self.workspace / "analysis"
         analysis_dir.mkdir(parents=True, exist_ok=True)
         transcript_path = analysis_dir / f"transcript_{language}.json"
 
-        report("Baixando somente o áudio para análise…")
+        report("Baixando somente o áudio para análise…", 3)
         audio = downloader.download_audio(url, analysis_dir, analysis_dir / "analysis_audio.%(ext)s")
-        report(f"Áudio pronto. Verificando transcrição em cache ({language.upper()})…")
+        report("Áudio pronto. Verificando transcrição em cache…", 15)
 
         transcript = self._load_cached_transcript(transcript_path)
         if transcript is None:
-            report(f"Transcrevendo com WhisperX em {language.upper()}…")
+            report("Transcrevendo com WhisperX local…", 17)
             transcript = WhisperXTranscriber().transcribe(audio, language=language)
             save_transcript(transcript, transcript_path)
-            report("Transcrição concluída.")
+            report("Transcrição concluída.", 50)
         else:
-            report(f"Transcrição em {language.upper()} reutilizada do cache.")
+            report(f"Transcrição em cache reutilizada ({language.upper()}).", 50)
 
-        report("A IA está avaliando os melhores momentos…")
+        report("A IA está avaliando os melhores momentos…", 52)
         clips = ViralAnalyzer().rank(transcript, max_clips=max_clips)
         if not clips:
             raise ToolError("A IA não encontrou clips válidos na transcrição.")
-        report("Momentos encontrados: " + ", ".join(f"{c.score:.0f}/100" for c in clips))
+        report("Momentos encontrados: " + ", ".join(f"{c.score:.0f}/100" for c in clips), 60)
 
-        report("Baixando somente os trechos selecionados…")
+        report("Baixando somente os trechos selecionados…", 61)
         sections_dir = self.workspace / "selected_clips"
         sections_dir.mkdir(parents=True, exist_ok=True)
         download_workers = max(1, min(int(os.getenv("OPUS_COPY_DOWNLOAD_WORKERS", "2")), len(clips)))
@@ -92,10 +95,11 @@ class Pipeline:
                 index, clip = futures[future]
                 section_paths.append((index, clip, future.result()))
                 completed += 1
-                report(f"Trecho {completed}/{len(clips)} baixado.")
+                percent = 60 + round(completed / len(clips) * 20)
+                report(f"Trecho {completed}/{len(clips)} baixado.", percent)
 
         section_paths.sort(key=lambda item: item[0])
-        report("Renderizando clips verticais 9:16 com legendas personalizadas…")
+        report("Renderizando clips verticais 9:16 com legendas personalizadas…", 81)
         final_dir = Path(output_dir) if output_dir else self.workspace / "clips"
         final_dir.mkdir(parents=True, exist_ok=True)
         renderer = ClipRenderer(subtitle_style=subtitle_style)
@@ -118,6 +122,8 @@ class Pipeline:
                 index, output = future.result()
                 outputs[index - 1] = output
                 completed += 1
-                report(f"Clip {completed}/{len(clips)} pronto: {output.name}")
+                percent = 80 + round(completed / len(clips) * 20)
+                report(f"Clip {completed}/{len(clips)} pronto: {output.name}", percent)
 
+        report(f"Concluído · {len(outputs)} clip(s) gerado(s).", 100)
         return outputs
