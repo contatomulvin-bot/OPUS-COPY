@@ -28,8 +28,6 @@ class WhisperXTranscriber:
     def _device_settings() -> tuple[str, str]:
         requested = os.getenv("WHISPER_DEVICE", os.getenv("WHISPERX_DEVICE", "auto")).strip().lower()
         if requested == "auto":
-            # CUDA is selected only when explicitly available to faster-whisper.
-            # AMD GPUs on Windows do not expose CUDA, so they safely fall back to CPU.
             try:
                 import torch  # type: ignore
                 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -47,8 +45,6 @@ class WhisperXTranscriber:
 
     @staticmethod
     def _thread_settings() -> tuple[int, int]:
-        # ctranslate2 expects integer thread counts. Passing None to cpu_threads
-        # breaks newer ctranslate2 builds even though older versions tolerated it.
         try:
             cpu_threads = max(0, int(os.getenv("WHISPER_CPU_THREADS", "0")))
         except ValueError:
@@ -64,15 +60,16 @@ class WhisperXTranscriber:
         cpu_threads, num_workers = self._thread_settings()
         key = (model_name, device, compute_type, cpu_threads, num_workers)
         if self._model is None or self._model_key != key:
+            # IMPORTANT: explicitly pass cpu_threads=0 when no value is configured.
+            # Some faster-whisper versions default cpu_threads to None and then pass
+            # that None into ctranslate2 as intra_threads=None, which current
+            # ctranslate2 rejects. Zero means automatic/default threading.
             kwargs = {
                 "device": device,
                 "compute_type": compute_type,
+                "cpu_threads": cpu_threads,
                 "num_workers": num_workers,
             }
-            # Never pass None: ctranslate2's current Whisper constructor requires
-            # an integer for intra_threads. Zero means automatic/default threading.
-            if cpu_threads > 0:
-                kwargs["cpu_threads"] = cpu_threads
             self._model = self.WhisperModel(model_name, **kwargs)
             self._model_key = key
         return self._model, device, compute_type
