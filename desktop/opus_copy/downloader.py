@@ -25,15 +25,30 @@ class YouTubeDownloader:
         )
         return any(marker in lowered for marker in markers)
 
+    @staticmethod
+    def _is_cookie_database_error(text: str) -> bool:
+        lowered = text.lower()
+        markers = (
+            "could not copy chrome cookie database",
+            "could not copy firefox cookie database",
+            "could not copy edge cookie database",
+            "could not copy opera cookie database",
+            "could not copy chromium cookie database",
+            "could not copy brave cookie database",
+            "database is locked",
+            "cookie database",
+        )
+        return any(marker in lowered for marker in markers)
+
     def _run_download(
         self,
         url: str,
         output_dir: Path,
         cookies_browser: str | None = None,
     ):
-        # Prefer clients that are currently less affected by YouTube's
-        # web/PO-token enforcement. Do not force a format: yt-dlp chooses a
-        # compatible stream and merges it with FFmpeg when necessary.
+        # Do not force a YouTube client here. yt-dlp can select the available
+        # client and stream formats itself; forcing clients can make some
+        # videos fail because of client-specific restrictions/tokens.
         template = str(output_dir / "source.%(ext)s")
         args = [
             self.executable,
@@ -41,7 +56,6 @@ class YouTubeDownloader:
             "--newline",
             "--no-warnings",
             "--no-part",
-            "--extractor-args", "youtube:player_client=tv,web_embedded,web",
             "--merge-output-format", "mp4",
             "-o", template,
         ]
@@ -82,14 +96,14 @@ class YouTubeDownloader:
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # User can override the browser order. By default we try a normal
-        # request, then the logged-in Brave/Chrome sessions. Browser cookies
-        # are the supported yt-dlp workaround for YouTube login/anti-bot checks.
+        # The browser process can lock its Chromium cookie database. Trying
+        # another browser in that situation is useful, but the cookie error
+        # itself must not be mistaken for a YouTube anti-bot block.
         configured = os.getenv("OPUS_COPY_YOUTUBE_COOKIES_BROWSER", "").strip()
         if configured:
             browsers = [b.strip() for b in configured.split(",") if b.strip()]
         else:
-            browsers = ["brave", "chrome"]
+            browsers = ["brave", "chrome", "edge"]
 
         attempts: list[str | None] = [None, *browsers]
         errors: list[str] = []
@@ -108,6 +122,13 @@ class YouTubeDownloader:
                 errors.append("yt-dlp terminou sem produzir um arquivo de vídeo.")
                 continue
 
+            if browser is not None and self._is_cookie_database_error(combined):
+                errors.append(
+                    f"Não foi possível ler o banco de cookies do {browser}. "
+                    "Feche esse navegador e tente novamente."
+                )
+                continue
+
             if self._is_blocked(combined):
                 label = "sem cookies" if browser is None else f"cookies do {browser}"
                 errors.append(f"YouTube bloqueou a tentativa com {label}.")
@@ -122,9 +143,9 @@ class YouTubeDownloader:
 
         details = "\n".join(errors)
         raise ToolError(
-            "O YouTube recusou o download com uma verificação anti-bot/login.\n\n"
+            "Não foi possível baixar este vídeo pelo YouTube.\n\n"
             f"{details}\n\n"
-            "Abra o vídeo no Brave ou Chrome e confirme que ele reproduz "
-            "normalmente. Se o navegador usado pelo OPUS-COPY não tiver uma "
-            "sessão válida, feche o navegador e tente novamente."
+            "Para usar cookies, feche completamente o Brave/Chrome/Edge e "
+            "tente novamente. O OPUS-COPY não precisa que você envie seu "
+            "arquivo de cookies."
         )
