@@ -52,7 +52,7 @@ export const api = {
         currentStep: render.status === 'COMPLETED' || render.status === 'FAILED' ? 'COMPLETED' : 'RENDER',
         stepLabel: render.currentStep || 'Renderizando vídeo...',
         error: render.errorMessage,
-        updatedAt: new Date(render.updatedAt),
+        updatedAt: render.updatedAt,
         result: render,
       };
     }
@@ -75,7 +75,7 @@ export const api = {
         currentStep: data.render.status === 'COMPLETED' || data.render.status === 'FAILED' ? 'COMPLETED' : 'RENDER',
         stepLabel: data.render.currentStep || 'Renderizando vídeo...',
         error: data.render.errorMessage,
-        updatedAt: new Date(data.render.updatedAt),
+        updatedAt: data.render.updatedAt,
         result: data.render,
       },
     };
