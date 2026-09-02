@@ -7,7 +7,7 @@ from .tools import ToolError, require_executable, run_process
 
 
 class YouTubeDownloader:
-    """Download one YouTube video with yt-dlp and browser-session fallbacks."""
+    """YouTube downloader with cache, audio-first analysis and section downloads."""
 
     def __init__(self) -> None:
         self.executable = require_executable("yt-dlp")
@@ -48,7 +48,6 @@ class YouTubeDownloader:
 
     @staticmethod
     def _windows_browser_profiles() -> list[tuple[str, str]]:
-        """Find real Chromium browser profiles on Windows."""
         local = Path(os.getenv("LOCALAPPDATA", ""))
         roaming = Path(os.getenv("APPDATA", ""))
         candidates = (
@@ -59,7 +58,6 @@ class YouTubeDownloader:
             ("vivaldi", local / "Vivaldi" / "User Data"),
             ("opera", roaming / "Opera Software" / "Opera Stable"),
         )
-
         found: list[tuple[str, str]] = []
         for browser, root in candidates:
             if not root.is_dir():
@@ -68,17 +66,15 @@ class YouTubeDownloader:
                 children = list(root.iterdir())
             except OSError:
                 continue
-            profiles: list[Path] = []
-            for child in children:
-                if not child.is_dir():
-                    continue
-                if (child / "Network" / "Cookies").is_file() or (child / "Cookies").is_file():
-                    profiles.append(child)
+            profiles = [
+                child for child in children
+                if child.is_dir()
+                and ((child / "Network" / "Cookies").is_file() or (child / "Cookies").is_file())
+            ]
             if not profiles and ((root / "Network" / "Cookies").is_file() or (root / "Cookies").is_file()):
-                profiles.append(root)
+                profiles = [root]
             profiles.sort(key=lambda p: (p.name != "Default", p.name.lower()))
             found.extend((browser, str(profile)) for profile in profiles)
-
         unique: list[tuple[str, str]] = []
         seen: set[tuple[str, str]] = set()
         for item in found:
@@ -113,38 +109,126 @@ class YouTubeDownloader:
             return server
         return None
 
-    def _run_download(self, url: str, output_dir: Path, cookies_browser: str | None = None):
-        template = str(output_dir / "source.%(ext)s")
-        args = [
-            self.executable,
-            "--no-playlist",
-            "--newline",
-            "--no-warnings",
-            "--no-part",
-            "--merge-output-format", "mp4",
-            "-o", template,
-        ]
+    def _base_args(self) -> list[str]:
+        args = [self.executable, "--no-playlist", "--newline", "--no-warnings", "--no-part"]
         provider_home = self._pot_provider_home()
         if provider_home:
             args.extend(["--extractor-args", f"youtubepot-bgutilscript:server_home={provider_home}"])
-        if cookies_browser:
-            args.extend(["--cookies-from-browser", cookies_browser])
-        args.append(url)
-        return run_process(args, timeout=6 * 60 * 60)
+        return args
 
-    @staticmethod
-    def _remove_stale_outputs(output_dir: Path) -> None:
-        for partial in output_dir.glob("source.*"):
-            if partial.is_file():
-                try:
-                    partial.unlink()
-                except OSError:
-                    pass
+    def _run(self, args: list[str], timeout: int = 6 * 60 * 60):
+        return run_process(args, timeout=timeout)
+
+    def _run_with_browser_fallbacks(self, build_args, output_dir: Path, success_check, purpose: str) -> Path:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        browsers = self._browser_attempts()
+        attempts: list[tuple[str, str | None]] = [("sem cookies", None)]
+        attempts.extend(
+            (
+                f"cookies do {browser} ({profile})" if profile else f"cookies do {browser}",
+                f"{browser}:{profile}" if profile else browser,
+            )
+            for browser, profile in browsers
+        )
+        errors: list[str] = []
+        for label, browser_arg in attempts:
+            result = self._run(build_args(browser_arg), timeout=6 * 60 * 60)
+            combined = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+            if result.returncode == 0:
+                path = success_check()
+                if path:
+                    return path
+                errors.append(f"{label}: yt-dlp terminou sem criar o arquivo esperado.")
+                continue
+            if browser_arg is not None and self._is_cookie_database_error(combined):
+                errors.append(f"{label}: banco de cookies não pôde ser lido.")
+                continue
+            if self._is_blocked(combined):
+                errors.append(f"YouTube bloqueou {purpose} com {label}.")
+                continue
+            raise ToolError(f"Falha no {purpose} do YouTube.\n\n{combined or 'yt-dlp encerrou sem informar o erro.'}")
+        provider = self._pot_provider_home()
+        provider_text = f"PO Token Provider detectado em: {provider}" if provider else "PO Token Provider não encontrado. Execute .\\desktop\\setup.ps1."
+        raise ToolError("Não foi possível concluir o " + purpose + " pelo YouTube.\n\n" + "\n".join(errors) + f"\n\n{provider_text}")
+
+    def download_audio(self, url: str, output_dir: Path, output: Path | None = None) -> Path:
+        clean_url = url.strip()
+        if not clean_url:
+            raise ToolError("Informe uma URL do YouTube.")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output = output or (output_dir / "analysis_audio.%(ext)s")
+        final_candidates = list(output_dir.glob("analysis_audio.*"))
+        if final_candidates:
+            newest = max((p for p in final_candidates if p.is_file() and p.stat().st_size > 0), key=lambda p: p.stat().st_mtime, default=None)
+            if newest:
+                return newest
+
+        def build(browser_arg: str | None) -> list[str]:
+            args = self._base_args() + ["-f", "ba/b", "-x", "--audio-format", "m4a", "-o", str(output)]
+            if browser_arg:
+                args.extend(["--cookies-from-browser", browser_arg])
+            args.append(clean_url)
+            return args
+
+        def check() -> Path | None:
+            paths = [p for p in output_dir.glob("analysis_audio.*") if p.is_file() and p.stat().st_size > 0]
+            return max(paths, key=lambda p: p.stat().st_mtime) if paths else None
+
+        return self._run_with_browser_fallbacks(build, output_dir, check, "download do áudio")
+
+    def download_section(self, url: str, output_dir: Path, index: int, clip) -> Path:
+        clean_url = url.strip()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stem = f"section_{index:02d}"
+        existing = sorted([p for p in output_dir.glob(stem + ".*") if p.is_file() and p.stat().st_size > 0])
+        if existing:
+            return existing[0]
+
+        start = max(0.0, float(clip.start))
+        end = max(start + 0.1, float(clip.end))
+        pattern = str(output_dir / f"{stem}.%(ext)s")
+
+        def build(browser_arg: str | None) -> list[str]:
+            args = self._base_args() + [
+                "--download-sections", f"*{start:.3f}-{end:.3f}",
+                "--merge-output-format", "mp4",
+                "-o", pattern,
+            ]
+            if browser_arg:
+                args.extend(["--cookies-from-browser", browser_arg])
+            args.append(clean_url)
+            return args
+
+        def check() -> Path | None:
+            candidates = [p for p in output_dir.glob(stem + ".*") if p.is_file() and p.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"} and p.stat().st_size > 0]
+            return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+
+        return self._run_with_browser_fallbacks(build, output_dir, check, f"download do trecho {index}")
+
+    # Full-video download remains available as a compatibility/fallback path.
+    def download(self, url: str, output_dir: Path, progress_callback=None) -> Path:
+        clean_url = url.strip()
+        if not clean_url:
+            raise ToolError("Informe uma URL do YouTube.")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        cached = self._find_cached_video(clean_url, output_dir)
+        if cached:
+            return cached
+
+        def build(browser_arg: str | None) -> list[str]:
+            args = self._base_args() + ["--merge-output-format", "mp4", "-o", str(output_dir / "source.%(ext)s")]
+            if browser_arg:
+                args.extend(["--cookies-from-browser", browser_arg])
+            args.append(clean_url)
+            return args
+
+        result = self._run_with_browser_fallbacks(build, output_dir, lambda: self._find_video(output_dir), "download do vídeo")
+        (output_dir / "source.url").write_text(clean_url + "\n", encoding="utf-8")
+        return result
 
     def _find_video(self, output_dir: Path) -> Path | None:
         candidates = sorted(output_dir.glob("source.*"), key=lambda p: p.stat().st_mtime, reverse=True)
-        videos = [p for p in candidates if p.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"} and p.stat().st_size > 0]
-        return videos[0] if videos else None
+        return next((p for p in candidates if p.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"} and p.stat().st_size > 0), None)
 
     def _find_cached_video(self, url: str, output_dir: Path) -> Path | None:
         marker = output_dir / "source.url"
@@ -152,59 +236,6 @@ class YouTubeDownloader:
         if not marker.is_file() or video is None:
             return None
         try:
-            saved_url = marker.read_text(encoding="utf-8").strip()
+            return video if marker.read_text(encoding="utf-8").strip() == url else None
         except OSError:
             return None
-        return video if saved_url == url else None
-
-    def download(self, url: str, output_dir: Path, progress_callback=None) -> Path:
-        clean_url = url.strip()
-        if not clean_url:
-            raise ToolError("Informe uma URL do YouTube.")
-        if not (clean_url.startswith("https://") or clean_url.startswith("http://")):
-            raise ToolError("Informe uma URL completa do YouTube (https://...).")
-
-        output_dir.mkdir(parents=True, exist_ok=True)
-        cached = self._find_cached_video(clean_url, output_dir)
-        if cached:
-            return cached
-
-        browser_attempts = self._browser_attempts()
-        attempts: list[tuple[str, str | None]] = [("sem cookies", None)]
-        attempts.extend(
-            (f"cookies do {browser} ({profile})" if profile else f"cookies do {browser}", f"{browser}:{profile}" if profile else browser)
-            for browser, profile in browser_attempts
-        )
-
-        errors: list[str] = []
-        for label, browser_arg in attempts:
-            self._remove_stale_outputs(output_dir)
-            result = self._run_download(clean_url, output_dir, browser_arg)
-            combined = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
-
-            if result.returncode == 0:
-                video = self._find_video(output_dir)
-                if video:
-                    (output_dir / "source.url").write_text(clean_url + "\n", encoding="utf-8")
-                    return video
-                errors.append("yt-dlp terminou sem produzir um arquivo de vídeo.")
-                continue
-
-            if browser_arg is not None and self._is_cookie_database_error(combined):
-                errors.append(f"{label}: banco de cookies não pôde ser lido.")
-                continue
-            if self._is_blocked(combined):
-                errors.append(f"YouTube bloqueou a tentativa com {label}.")
-                continue
-            raise ToolError("Falha no download do YouTube.\n\n" f"{combined or 'yt-dlp encerrou sem informar o erro.'}")
-
-        details = "\n".join(errors)
-        detected = ", ".join(label for label, _ in attempts[1:]) or "nenhum perfil de navegador"
-        provider = self._pot_provider_home()
-        provider_text = f"PO Token Provider detectado em: {provider}" if provider else "PO Token Provider não foi encontrado neste PC. Execute .\\desktop\\setup.ps1 para instalá-lo."
-        raise ToolError(
-            "Não foi possível baixar este vídeo pelo YouTube.\n\n"
-            f"{details}\n\n"
-            f"Perfis de navegador detectados: {detected}.\n"
-            f"{provider_text}"
-        )
