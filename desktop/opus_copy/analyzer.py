@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 
 from .tools import ToolError
@@ -52,7 +53,23 @@ score deve ser de 0 a 100. Os timestamps DEVEM corresponder aos segmentos fornec
 TRANSCRIÇÃO:
 {json.dumps(compact, ensure_ascii=False)}"""
 
-        response = self.client.models.generate_content(model=self.model, contents=prompt)
+        response = None
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = self.client.models.generate_content(model=self.model, contents=prompt)
+                break
+            except Exception as exc:
+                last_error = exc
+                error_text = str(exc)
+                is_temporary = "503" in error_text or "UNAVAILABLE" in error_text or "high demand" in error_text.lower()
+                if not is_temporary or attempt == 2:
+                    raise
+                time.sleep(3 * (attempt + 1))
+
+        if response is None:
+            raise ToolError(f"Gemini não respondeu após 3 tentativas: {last_error}")
+
         text = getattr(response, "text", "") or ""
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
