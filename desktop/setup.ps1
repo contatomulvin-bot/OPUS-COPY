@@ -16,11 +16,10 @@ $venvPython = Join-Path $venv 'Scripts\python.exe'
 & $venvPython -m pip install -r desktop\requirements.txt
 if ($LASTEXITCODE -ne 0) { throw 'A instalação das dependências Python falhou.' }
 
-& $venvPython -c "import PySide6, yt_dlp, whisperx; print('Desktop dependencies OK')"
+& $venvPython -c "import PySide6, yt_dlp, faster_whisper; print('Desktop dependencies OK')"
 if ($LASTEXITCODE -ne 0) { throw 'A validação das dependências falhou.' }
 
-# YouTube PO Token provider. yt-dlp's current YouTube guidance recommends
-# using a provider plugin; bgutil can run its provider script through Node.
+# YouTube PO Token provider.
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
   $winget = Get-Command winget -ErrorAction SilentlyContinue
@@ -71,6 +70,6 @@ Write-Host 'Validando instalação do PO Token Provider...' -ForegroundColor Yel
 & $venvPython -m yt_dlp -v --ignore-config --version 2>&1 | Select-String -Pattern 'yt-dlp|bgutil' | Select-Object -First 10
 if ($LASTEXITCODE -ne 0) { throw 'Não foi possível executar o yt-dlp do ambiente desktop.' }
 
-Write-Host 'Setup concluído com suporte a PO Token.' -ForegroundColor Green
+Write-Host 'Setup concluído com faster-whisper e suporte a PO Token.' -ForegroundColor Green
 Write-Host 'Para iniciar:' -ForegroundColor Green
 Write-Host '.\desktop\run.ps1'
