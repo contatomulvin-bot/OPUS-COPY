@@ -29,7 +29,7 @@ class ViralAnalyzer:
         if not api_key:
             raise ToolError("GEMINI_API_KEY não configurada.")
         self.client = genai.Client(api_key=api_key)
-        self.model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        self.model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
     def rank(self, transcript: dict, max_clips: int = 8) -> list[ClipCandidate]:
         segments = transcript.get("segments", [])
