@@ -31,6 +31,28 @@ class ViralAnalyzer:
             raise ToolError("GEMINI_API_KEY não configurada.")
         self.client = genai.Client(api_key=api_key)
         self.model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+        fallback = os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.5-flash,gemini-3.5-flash-lite")
+        self.models = list(dict.fromkeys([self.model, *[m.strip() for m in fallback.split(",") if m.strip()]]))
+
+    def _generate(self, prompt: str):
+        last_error: Exception | None = None
+        for model in self.models:
+            for attempt in range(3):
+                try:
+                    return self.client.models.generate_content(model=model, contents=prompt)
+                except Exception as exc:
+                    last_error = exc
+                    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+                    text = str(exc).upper()
+                    is_503 = status == 503 or "503" in text or "UNAVAILABLE" in text
+                    if not is_503:
+                        raise
+                    if attempt < 2:
+                        time.sleep(5 * (2 ** attempt))
+        raise ToolError(
+            "Gemini indisponível (503) nos modelos configurados. "
+            f"Último erro: {last_error}"
+        ) from last_error
 
     def rank(self, transcript: dict, max_clips: int = 8) -> list[ClipCandidate]:
         segments = transcript.get("segments", [])
@@ -53,23 +75,7 @@ score deve ser de 0 a 100. Os timestamps DEVEM corresponder aos segmentos fornec
 TRANSCRIÇÃO:
 {json.dumps(compact, ensure_ascii=False)}"""
 
-        response = None
-        last_error: Exception | None = None
-        for attempt in range(3):
-            try:
-                response = self.client.models.generate_content(model=self.model, contents=prompt)
-                break
-            except Exception as exc:
-                last_error = exc
-                error_text = str(exc)
-                is_temporary = "503" in error_text or "UNAVAILABLE" in error_text or "high demand" in error_text.lower()
-                if not is_temporary or attempt == 2:
-                    raise
-                time.sleep(3 * (attempt + 1))
-
-        if response is None:
-            raise ToolError(f"Gemini não respondeu após 3 tentativas: {last_error}")
-
+        response = self._generate(prompt)
         text = getattr(response, "text", "") or ""
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
