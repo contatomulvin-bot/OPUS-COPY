@@ -68,15 +68,13 @@ export class YouTubeProvider {
       throw new Error(availability.reason || 'YOUTUBE_PROCESSING_UNAVAILABLE');
     }
 
-    const args = [
-      '--dump-single-json',
-      '--no-warnings',
-      '--no-playlist',
-      url.trim(),
-    ];
+    const args = ['--dump-single-json', '--no-warnings', '--no-playlist', url.trim()];
 
     try {
-      const { stdout } = await execFileAsync(this.ytDlpPath, args, { timeout: 30000 });
+      const { stdout } = await execFileAsync(this.ytDlpPath, args, {
+        timeout: 60000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
       const data = JSON.parse(stdout);
 
       return {
@@ -112,10 +110,6 @@ export class YouTubeProvider {
     }
 
     const outputTemplate = path.join(targetDir, `${videoId}.%(ext)s`);
-
-    // Do not force a specific YouTube format. The installed yt-dlp version's
-    // default selector is more resilient to YouTube's changing format access
-    // rules and was verified manually in the user's environment.
     const args = [
       '--merge-output-format', 'mp4',
       '--no-playlist',
@@ -126,7 +120,12 @@ export class YouTubeProvider {
     ];
 
     try {
-      await execFileAsync(this.ytDlpPath, args, { timeout: 180000 });
+      // Long videos can legitimately take more than three minutes to download.
+      // Keep a generous timeout and enough buffer for yt-dlp's progress output.
+      await execFileAsync(this.ytDlpPath, args, {
+        timeout: 30 * 60 * 1000,
+        maxBuffer: 20 * 1024 * 1024,
+      });
 
       let downloadedFile = targetPath;
       if (!fs.existsSync(targetPath)) {
@@ -164,7 +163,7 @@ export class YouTubeProvider {
           };
           await fs.promises.unlink(infoJsonPath).catch(() => {});
         } catch {
-          // ignore info json read errors
+          // Ignore malformed metadata; the video itself is still usable.
         }
       }
 
