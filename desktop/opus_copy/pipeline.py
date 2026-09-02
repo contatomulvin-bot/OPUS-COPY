@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .analyzer import ViralAnalyzer
 from .downloader import YouTubeDownloader
-from .renderer import ClipRenderer
+from .renderer import ClipRenderer, SubtitleStyle
 from .tools import ToolError, free_space_gb
 from .transcriber import WhisperXTranscriber, save_transcript
 
@@ -38,6 +38,7 @@ class Pipeline:
         max_clips: int = 5,
         progress=None,
         output_dir: Path | None = None,
+        subtitle_style: SubtitleStyle | None = None,
     ) -> list[Path]:
         self.workspace.mkdir(parents=True, exist_ok=True)
         if free_space_gb(self.workspace) < 2:
@@ -101,19 +102,22 @@ class Pipeline:
                 report(f"Trecho {completed}/{len(clips)} baixado.")
 
         section_paths.sort(key=lambda item: item[0])
-        report("Renderizando clips verticais 9:16 com legendas…")
+        report("Renderizando clips verticais 9:16 com legendas personalizadas…")
         final_dir = Path(output_dir) if output_dir else self.workspace / "clips"
         final_dir.mkdir(parents=True, exist_ok=True)
-        renderer = ClipRenderer()
+        renderer = ClipRenderer(subtitle_style=subtitle_style)
         outputs: list[Path] = [Path() for _ in clips]
         render_workers = max(
             1,
             min(int(os.getenv("OPUS_COPY_RENDER_WORKERS", "2")), len(clips)),
         )
 
+        style = subtitle_style or SubtitleStyle()
+        style_key = hashlib.sha256(repr(style).encode("utf-8")).hexdigest()[:8]
+
         def render_one(index: int, clip, source: Path) -> tuple[int, Path]:
             key = self._clip_cache_key(url, clip)
-            output = final_dir / f"clip_{index:02d}_{clip.score:.0f}_{key}.mp4"
+            output = final_dir / f"clip_{index:02d}_{clip.score:.0f}_{key}_{style_key}.mp4"
             if output.is_file() and output.stat().st_size > 0:
                 return index, output
             return index, renderer.render_section(source, clip, transcript, output)
