@@ -3,9 +3,9 @@
 
 > **AI-powered desktop video clipper for Windows**
 
-Transforme vídeos longos em clips verticais prontos para publicação.
+Transforme vídeos longos em clips verticais prontos para publicação — com **transcrição local rápida, seleção inteligente, ganchos e palavras-chave pensados para audiência no YouTube**.
 
-O **OPUS-COPY** é um aplicativo desktop desenvolvido para encontrar automaticamente os melhores momentos de vídeos longos usando IA, gerar cortes, adicionar legendas e preparar o conteúdo em formato vertical 9:16.
+O **OPUS-COPY** é um aplicativo desktop desenvolvido para encontrar automaticamente os melhores momentos de vídeos longos usando IA, gerar cortes, adicionar legendas e preparar conteúdo em formato vertical 9:16.
 
 ---
 
@@ -13,17 +13,24 @@ O **OPUS-COPY** é um aplicativo desktop desenvolvido para encontrar automaticam
 
 * 🎥 Download de vídeos do YouTube
 * 🤖 Análise automática dos melhores momentos com IA
-* 🧠 Transcrição com WhisperX
+* ⚡ Transcrição local com **faster-whisper**
+* 🧠 Timestamps por palavra sem uma segunda etapa de alinhamento WhisperX
+* 🌎 Seleção do idioma de transcrição
 * ✂️ Geração automática de clips
+* 🎯 Ranking por potencial de retenção e força do gancho
+* 🪝 Geração de **hooks/ganchos** para aumentar o interesse inicial
+* 🔎 Geração de **palavras-chave relacionadas ao YouTube**
+* 📊 Score detalhado de cada oportunidade
 * 📱 Conversão para formato vertical 9:16
 * 📝 Legendas automáticas
 * 🎬 Processamento com FFmpeg
-* 🔎 Seleção baseada em potencial de retenção
-* 🖥️ Interface desktop para Windows
 * ⚡ Processamento em segundo plano sem travar a interface
+* 💾 Cache de transcrições para evitar processamento repetido
+* 🚀 Download e renderização de clips em paralelo
 * 🧹 Gerenciamento de arquivos temporários
 * 📋 Diagnóstico detalhado de erros
 * 🧩 Suporte a PO Token Provider para o ecossistema atual do YouTube
+* 🖥️ Preparação para distribuição como aplicativo Windows `.exe`
 
 ---
 
@@ -34,47 +41,150 @@ YouTube URL
      │
      ▼
 ┌──────────────┐
-│   yt-dlp     │
-│   Download   │
+│    yt-dlp    │
+│    Download  │
 └──────┬───────┘
        │
        ▼
-┌──────────────┐
-│   WhisperX   │
-│ Transcrição  │
-└──────┬───────┘
+┌──────────────────┐
+│  faster-whisper  │
+│ Transcrição local│
+│ + word timestamps│
+└──────┬───────────┘
        │
        ▼
+┌─────────────────────┐
+│         IA          │
+│ Hook + Retenção     │
+│ Curiosidade + Valor │
+│ Keywords YouTube    │
+└─────────┬───────────┘
+          │
+          ▼
 ┌──────────────┐
-│     IA       │
-│ Clip Analysis│
+│ Clip Selection│
+│ Score / Rank  │
 └──────┬───────┘
        │
        ▼
 ┌──────────────┐
 │    FFmpeg    │
-│    Render     │
+│ Reframe 9:16 │
+│ + Legendas   │
 └──────┬───────┘
        │
        ▼
   MP4 9:16
   + Legendas
+  + Metadados
 ```
+
+---
+
+## 🎯 Seleção orientada para audiência
+
+O OPUS-COPY não procura apenas trechos interessantes. A IA avalia cada oportunidade pensando em **retenção e descoberta no YouTube**.
+
+### ⚡ Critérios de ranking
+
+| Critério | Peso |
+| --- | ---: |
+| 🪝 Força do gancho nos primeiros 3–5s | **30%** |
+| 📈 Potencial de retenção | **20%** |
+| 🤯 Curiosidade / surpresa | **15%** |
+| ❤️ Emoção / identificação | **10%** |
+| 💎 Valor / entretenimento | **10%** |
+| 🔄 Potencial de compartilhamento | **10%** |
+| 🎯 Clareza e contexto independente | **5%** |
+
+### 🪝 Ganchos
+
+A IA procura estruturas que naturalmente despertam interesse, como:
+
+* perguntas fortes;
+* revelações;
+* contradições;
+* opiniões fortes;
+* histórias incomuns;
+* erros e consequências;
+* descobertas;
+* números relevantes;
+* segredos ou informações inesperadas;
+* promessas e conflitos.
+
+O sistema **não deve inventar fatos** nem transformar um trecho em clickbait enganoso. O gancho precisa representar o conteúdo real do clip.
+
+### 🔎 Palavras-chave para YouTube
+
+Cada clip pode receber de **3 a 8 palavras-chave/frases relacionadas ao assunto**, priorizando termos que façam sentido para descoberta e pesquisa no YouTube.
+
+Exemplo conceitual:
+
+```text
+Título: O erro que quase todo iniciante comete
+
+Hook: "Esse erro parece pequeno, mas pode acabar com seu resultado."
+
+Keywords:
+- erros de iniciantes
+- dicas para iniciantes
+- como começar
+- erros comuns
+- tutorial
+```
+
+As palavras-chave são geradas a partir do conteúdo real da transcrição e não devem ser adicionadas apenas para parecerem virais.
+
+---
+
+## ⚡ Transcrição rápida
+
+O pipeline local utiliza **faster-whisper** em vez de executar o fluxo completo do WhisperX.
+
+Isso evita uma segunda etapa pesada de alinhamento quando os timestamps por palavra já são suficientes para o sistema de legendas.
+
+O modelo é carregado e reutilizado durante a execução, e as transcrições podem ser armazenadas em cache para evitar processamento desnecessário.
+
+### Dispositivo
+
+O backend detecta automaticamente o dispositivo compatível com o runtime instalado:
+
+```env
+WHISPER_DEVICE=auto
+WHISPER_MODEL=small
+WHISPER_COMPUTE_TYPE=int8
+```
+
+Também é possível configurar explicitamente:
+
+```env
+WHISPER_DEVICE=cpu
+```
+
+ou, em ambientes com suporte CUDA compatível:
+
+```env
+WHISPER_DEVICE=cuda
+WHISPER_COMPUTE_TYPE=float16
+```
+
+> **Nota:** CUDA é destinado a GPUs NVIDIA. Em Windows com GPUs AMD, o projeto utiliza um fallback compatível em vez de assumir que CUDA estará disponível.
 
 ---
 
 ## 🛠️ Tecnologias
 
-| Tecnologia | Função                      |
-| ---------- | --------------------------- |
-| Python     | Backend e pipeline          |
-| PySide6    | Interface desktop           |
-| yt-dlp     | Download de vídeos          |
-| WhisperX   | Transcrição                 |
-| Gemini     | Análise com IA              |
-| FFmpeg     | Edição e renderização       |
-| SQLite     | Persistência local          |
+| Tecnologia | Função |
+| ---------- | ------- |
+| Python | Backend e pipeline |
+| PySide6 | Interface desktop |
+| yt-dlp | Download de vídeos |
+| faster-whisper | Transcrição local |
+| Gemini | Análise de clips e audiência |
+| FFmpeg | Edição e renderização |
+| SQLite | Persistência local |
 | PowerShell | Setup e execução no Windows |
+| PyInstaller | Empacotamento Windows |
 
 ---
 
@@ -93,11 +203,12 @@ YouTube URL
 * Python 3.11
 * PySide6
 * yt-dlp
-* WhisperX
+* faster-whisper
 * FFmpeg
 * ffprobe
 * Google Gemini SDK
 * PO Token Provider
+* PyInstaller
 
 ---
 
@@ -134,60 +245,54 @@ Crie um arquivo `.env` na raiz do projeto:
 GEMINI_API_KEY=SEU_TOKEN_AQUI
 ```
 
+Opcionalmente, para configurar a transcrição:
+
+```env
+WHISPER_DEVICE=auto
+WHISPER_MODEL=small
+WHISPER_COMPUTE_TYPE=int8
+```
+
 Nunca publique sua API key no GitHub.
 
 ---
 
-# 📁 Estrutura do projeto
+# 📁 Metadados gerados
+
+Durante o processamento, o OPUS-COPY pode gerar:
 
 ```text
-OPUS-COPY/
-│
-├── desktop/
-│   ├── main.py
-│   ├── requirements.txt
-│   ├── setup.ps1
-│   ├── run.ps1
-│   │
-│   └── opus_copy/
-│       ├── analyzer.py
-│       ├── downloader.py
-│       ├── pipeline.py
-│       ├── renderer.py
-│       ├── tools.py
-│       └── transcriber.py
-│
-├── .env
-├── .gitignore
-└── README.md
+analysis/
+├── transcript_pt_faster_whisper_v2.json
+└── clip_metadata.json
 ```
 
+O `clip_metadata.json` guarda informações como:
+
+```json
+{
+  "rank": 1,
+  "score": 94,
+  "title": "Título sugerido",
+  "hook": "Gancho do clip",
+  "category": "EDUCATION",
+  "keywords": [
+    "palavra-chave 1",
+    "palavra-chave 2"
+  ],
+  "scores": {
+    "hook": 96,
+    "retention": 93,
+    "curiosity": 90
+  }
+}
+```
+
+Isso permite que a interface futuramente mostre não apenas o vídeo selecionado, mas **por que a IA escolheu aquele momento**.
+
 ---
 
-# 🎯 Seleção inteligente de clips
-
-O OPUS-COPY não deve simplesmente cortar intervalos aleatórios do vídeo.
-
-A análise considera características como:
-
-* Hook
-* Emoção
-* Curiosidade
-* Clareza
-* Valor
-* Entretenimento
-* Contexto independente
-* Potencial de retenção
-* Força do início
-* Força do final
-* Duração ideal
-* Sobreposição entre clips
-
-Os clips também devem passar por deduplicação para evitar vários cortes praticamente iguais.
-
----
-
-# 🎞️ Saída
+# 📱 Saída
 
 Os clips são preparados para conteúdo vertical:
 
@@ -199,7 +304,7 @@ Vídeo: H.264
 Legendas: automáticas
 ```
 
-A ideia é gerar vídeos compatíveis com plataformas como:
+A ideia é gerar vídeos compatíveis com:
 
 * TikTok
 * Instagram Reels
@@ -237,13 +342,13 @@ O projeto deve diferenciar claramente:
 * yt-dlp
 * FFmpeg
 * ffprobe
-* WhisperX
+* faster-whisper
 * Renderização
 * Pipeline
 
 ### Testes dependentes do ambiente
 
-Alguns testes dependem do Windows, navegador, rede, conta do YouTube ou disponibilidade das APIs.
+Alguns testes dependem do Windows, GPU, navegador, rede, conta do YouTube ou disponibilidade das APIs.
 
 Esses testes não devem ser considerados aprovados sem execução real.
 
@@ -258,9 +363,11 @@ O objetivo atual é tornar todo o pipeline confiável para uso real:
 ```text
 Download
    ↓
-Transcrição
+Transcrição local
    ↓
 Análise IA
+   ↓
+Hook + Keywords
    ↓
 Seleção
    ↓
@@ -282,8 +389,13 @@ MP4 final
 * [x] Aplicação desktop
 * [x] Interface PySide6
 * [x] Download com yt-dlp
-* [x] Transcrição com WhisperX
+* [x] Pipeline de transcrição
+* [x] Transcrição local com faster-whisper
+* [x] Timestamps por palavra
 * [x] Análise de clips
+* [x] Ranking de potencial de retenção
+* [x] Geração de hooks
+* [x] Geração de palavras-chave para YouTube
 * [x] Renderização FFmpeg
 * [x] Tratamento de erros
 
@@ -294,7 +406,9 @@ MP4 final
 * [ ] Mais estilos de legenda
 * [ ] Preview dos clips
 * [ ] Histórico de projetos
+* [ ] Barra de progresso com ETA mais precisa
 * [ ] Melhor tratamento de YouTube
+* [ ] Interface com estética mais refinada
 
 ## v0.3
 
@@ -303,7 +417,9 @@ MP4 final
 * [ ] Detecção de rosto
 * [ ] Tracking de sujeito
 * [ ] Presets para TikTok / Reels / Shorts
-* [ ] Empacotamento `.exe`
+* [ ] Empacotamento `.exe` final
+* [ ] Download/gerenciamento automático de modelos
+* [ ] Otimizações específicas para GPUs AMD
 
 ---
 
@@ -317,9 +433,9 @@ O OPUS-COPY utiliza uma identidade visual escura e minimalista, com uma marca ba
 
 O objetivo do OPUS-COPY é transformar:
 
-> **1 vídeo longo → vários clips relevantes → conteúdo pronto para publicação**
+> **1 vídeo longo → vários clips relevantes → hooks fortes → conteúdo pronto para publicação**
 
-A prioridade do projeto é **qualidade e confiabilidade**, não apenas automação.
+A prioridade do projeto é **qualidade, retenção e confiabilidade**, não apenas automação.
 
 Nenhum recurso deve ser considerado concluído apenas porque o código foi escrito. Sempre que possível, ele precisa ser validado por um teste real.
 
