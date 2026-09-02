@@ -5,21 +5,18 @@ from PyInstaller.utils.hooks import collect_all
 ROOT = Path(__file__).resolve().parent
 ROOT_PARENT = ROOT.parent
 
-hiddenimports = []
-datas = []
+datas = [(str(ROOT / "assets"), "assets")]
 binaries = []
+hiddenimports = []
+
 for package in ("whisperx", "torch", "torchaudio", "faster_whisper", "ctranslate2", "pyannote.audio", "google.genai"):
     try:
         d, b, h = collect_all(package)
-        datas += d
-        binaries += b
-        hiddenimports += h
+        datas.extend(d)
+        binaries.extend(b)
+        hiddenimports.extend(h)
     except Exception:
         pass
-
-datas += [
-    (str(ROOT / "assets"), "assets"),
-]
 
 analysis = Analysis(
     [str(ROOT / "main.py")],
@@ -39,9 +36,8 @@ pyz = PYZ(analysis.pure)
 exe = EXE(
     pyz,
     analysis.scripts,
-    analysis.binaries,
-    analysis.datas,
     [],
+    exclude_binaries=True,
     name="OPUS-COPY",
     debug=False,
     bootloader_ignore_signals=False,
@@ -49,4 +45,13 @@ exe = EXE(
     upx=False,
     console=False,
     icon=str(ROOT / "assets" / "opus-copy-logo.ico") if (ROOT / "assets" / "opus-copy-logo.ico").is_file() else None,
+)
+
+coll = COLLECT(
+    exe,
+    analysis.binaries,
+    analysis.datas,
+    strip=False,
+    upx=False,
+    name="OPUS-COPY",
 )
