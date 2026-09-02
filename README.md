@@ -1,4 +1,5 @@
-<img width="1073" height="756" alt="image" src="https://github.com/user-attachments/assets/ade5d149-2ce6-476b-97e2-5fe9a5af2d74" />
+<img width="1240" height="888" alt="image" src="https://github.com/user-attachments/assets/f8de1e86-0bf0-42fe-b534-183360bce287" />
+
 # OPUS-COPY
 
 > **AI-powered desktop video clipper for Windows**
