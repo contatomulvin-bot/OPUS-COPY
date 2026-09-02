@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from .analyzer import ClipCandidate
-from .tools import ToolError, ensure_parent, require_executable, run_process
+from .tools import ToolError, require_executable, run_process
 
 
 def _srt_time(seconds: float) -> str:
@@ -48,13 +47,14 @@ def write_srt(transcript: dict, clip: ClipCandidate, path: Path) -> None:
             if group and group_start is not None and group_end is not None:
                 entries.append((group_start - clip.start, group_end - clip.start, " ".join(group)))
         else:
-            entries.append((max(start, clip.start) - clip.start, min(end, clip.end) - clip.start, segment.get("text", "").strip()))
+            text = str(segment.get("text", "")).strip()
+            if text:
+                entries.append((max(start, clip.start) - clip.start, min(end, clip.end) - clip.start, text))
 
     path.write_text(
         "\n\n".join(
             f"{i}\n{_srt_time(s)} --> {_srt_time(e)}\n{text}"
             for i, (s, e, text) in enumerate(entries, 1)
-            if text
         ) + "\n",
         encoding="utf-8",
     )
@@ -71,13 +71,14 @@ class ClipRenderer:
 
         subtitle_filter = f"subtitles='{_escape_subtitle_path(srt)}'"
         vf = f"crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920:flags=fast_bilinear,{subtitle_filter}"
-        duration = clip.end - clip.start
-        args = [
-            self.ffmpeg, "-y",
-            "-ss", f"{clip.start:.3f}",
-            "-i", str(source),
-            "-t", f"{duration:.3f}",
-            "-vf", vf,
+        duration = max(0.1, clip.end - clip.start)
+        is_pretrimmed_section = source.name.lower().startswith("section_")
+
+        args = [self.ffmpeg, "-y"]
+        if not is_pretrimmed_section:
+            args.extend(["-ss", f"{clip.start:.3f}"])
+        args.extend(["-i", str(source), "-t", f"{duration:.3f}", "-vf", vf])
+        args.extend([
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-crf", "21",
@@ -85,7 +86,7 @@ class ClipRenderer:
             "-b:a", "128k",
             "-movflags", "+faststart",
             str(output),
-        ]
+        ])
         result = run_process(args, timeout=max(600, int(duration * 15)))
         if result.returncode != 0:
             raise ToolError(f"FFmpeg falhou ao renderizar o clip:\n{result.stderr.strip()}")
