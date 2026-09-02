@@ -35,6 +35,12 @@ class YouTubeDownloader:
             "could not copy opera cookie database",
             "could not copy chromium cookie database",
             "could not copy brave cookie database",
+            "could not find chrome cookies database",
+            "could not find firefox cookies database",
+            "could not find edge cookies database",
+            "could not find opera cookies database",
+            "could not find chromium cookies database",
+            "could not find brave cookies database",
             "database is locked",
             "cookie database",
         )
@@ -96,9 +102,8 @@ class YouTubeDownloader:
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # The browser process can lock its Chromium cookie database. Trying
-        # another browser in that situation is useful, but the cookie error
-        # itself must not be mistaken for a YouTube anti-bot block.
+        # Browser cookie extraction is optional. A browser that is not
+        # installed/configured must not abort the entire YouTube download.
         configured = os.getenv("OPUS_COPY_YOUTUBE_COOKIES_BROWSER", "").strip()
         if configured:
             browsers = [b.strip() for b in configured.split(",") if b.strip()]
@@ -124,8 +129,8 @@ class YouTubeDownloader:
 
             if browser is not None and self._is_cookie_database_error(combined):
                 errors.append(
-                    f"Não foi possível ler o banco de cookies do {browser}. "
-                    "Feche esse navegador e tente novamente."
+                    f"Cookies do {browser} não estão disponíveis neste PC; "
+                    "essa tentativa foi ignorada."
                 )
                 continue
 
@@ -145,7 +150,7 @@ class YouTubeDownloader:
         raise ToolError(
             "Não foi possível baixar este vídeo pelo YouTube.\n\n"
             f"{details}\n\n"
-            "Para usar cookies, feche completamente o Brave/Chrome/Edge e "
-            "tente novamente. O OPUS-COPY não precisa que você envie seu "
-            "arquivo de cookies."
+            "Se o YouTube estiver exigindo login/anti-bot, feche completamente "
+            "o Brave/Chrome/Edge e tente novamente. O OPUS-COPY não precisa que "
+            "você envie seu arquivo de cookies."
         )
