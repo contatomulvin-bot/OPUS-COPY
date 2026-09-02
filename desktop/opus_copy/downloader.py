@@ -43,6 +43,7 @@ class YouTubeDownloader:
             "could not find brave cookies database",
             "database is locked",
             "cookie database",
+            "failed to decrypt with dpapi",
         )
         return any(marker in lowered for marker in markers)
 
@@ -51,6 +52,9 @@ class YouTubeDownloader:
         local = Path(os.getenv("LOCALAPPDATA", ""))
         roaming = Path(os.getenv("APPDATA", ""))
         candidates = (
+            # Firefox does not use Chromium's Windows cookie encryption and is
+            # therefore a safer automatic browser fallback on affected systems.
+            ("firefox", roaming / "Mozilla" / "Firefox" / "Profiles"),
             ("brave", local / "BraveSoftware" / "Brave-Browser" / "User Data"),
             ("chrome", local / "Google" / "Chrome" / "User Data"),
             ("edge", local / "Microsoft" / "Edge" / "User Data"),
@@ -66,15 +70,24 @@ class YouTubeDownloader:
                 children = list(root.iterdir())
             except OSError:
                 continue
-            profiles = [
-                child for child in children
-                if child.is_dir()
-                and ((child / "Network" / "Cookies").is_file() or (child / "Cookies").is_file())
-            ]
-            if not profiles and ((root / "Network" / "Cookies").is_file() or (root / "Cookies").is_file()):
-                profiles = [root]
+
+            if browser == "firefox":
+                profiles = [
+                    child for child in children
+                    if child.is_dir() and (child / "cookies.sqlite").is_file()
+                ]
+            else:
+                profiles = [
+                    child for child in children
+                    if child.is_dir()
+                    and ((child / "Network" / "Cookies").is_file() or (child / "Cookies").is_file())
+                ]
+                if not profiles and ((root / "Network" / "Cookies").is_file() or (root / "Cookies").is_file()):
+                    profiles = [root]
+
             profiles.sort(key=lambda p: (p.name != "Default", p.name.lower()))
             found.extend((browser, str(profile)) for profile in profiles)
+
         unique: list[tuple[str, str]] = []
         seen: set[tuple[str, str]] = set()
         for item in found:
@@ -101,6 +114,14 @@ class YouTubeDownloader:
         return attempts
 
     @staticmethod
+    def _cookies_file() -> Path | None:
+        configured = os.getenv("OPUS_COPY_YOUTUBE_COOKIES_FILE", "").strip()
+        if not configured:
+            return None
+        path = Path(configured).expanduser()
+        return path if path.is_file() else None
+
+    @staticmethod
     def _pot_provider_home() -> Path | None:
         configured = os.getenv("OPUS_COPY_POT_PROVIDER_HOME", "").strip()
         root = Path(configured).expanduser() if configured else Path(os.getenv("USERPROFILE", "")) / "bgutil-ytdlp-pot-provider"
@@ -122,7 +143,10 @@ class YouTubeDownloader:
     def _run_with_browser_fallbacks(self, build_args, output_dir: Path, success_check, purpose: str) -> Path:
         output_dir.mkdir(parents=True, exist_ok=True)
         browsers = self._browser_attempts()
+        cookie_file = self._cookies_file()
         attempts: list[tuple[str, str | None]] = [("sem cookies", None)]
+        if cookie_file:
+            attempts.append((f"cookies.txt ({cookie_file})", f"file:{cookie_file}"))
         attempts.extend(
             (
                 f"cookies do {browser} ({profile})" if profile else f"cookies do {browser}",
@@ -141,7 +165,7 @@ class YouTubeDownloader:
                 errors.append(f"{label}: yt-dlp terminou sem criar o arquivo esperado.")
                 continue
             if browser_arg is not None and self._is_cookie_database_error(combined):
-                errors.append(f"{label}: banco de cookies não pôde ser lido.")
+                errors.append(f"{label}: cookies não puderam ser lidos/descriptografados; tentando outra opção.")
                 continue
             if self._is_blocked(combined):
                 errors.append(f"YouTube bloqueou {purpose} com {label}.")
@@ -149,7 +173,16 @@ class YouTubeDownloader:
             raise ToolError(f"Falha no {purpose} do YouTube.\n\n{combined or 'yt-dlp encerrou sem informar o erro.'}")
         provider = self._pot_provider_home()
         provider_text = f"PO Token Provider detectado em: {provider}" if provider else "PO Token Provider não encontrado. Execute .\\desktop\\setup.ps1."
-        raise ToolError("Não foi possível concluir o " + purpose + " pelo YouTube.\n\n" + "\n".join(errors) + f"\n\n{provider_text}")
+        cookie_text = (
+            "Se o vídeo exigir login, configure OPUS_COPY_YOUTUBE_COOKIES_FILE apontando para um cookies.txt exportado do navegador."
+            if not cookie_file
+            else "O arquivo de cookies configurado também não pôde ser usado."
+        )
+        raise ToolError(
+            "Não foi possível concluir o " + purpose + " pelo YouTube.\n\n"
+            + "\n".join(errors)
+            + f"\n\n{provider_text}\n{cookie_text}"
+        )
 
     def download_audio(self, url: str, output_dir: Path, output: Path | None = None) -> Path:
         clean_url = url.strip()
@@ -166,7 +199,10 @@ class YouTubeDownloader:
         def build(browser_arg: str | None) -> list[str]:
             args = self._base_args() + ["-f", "ba/b", "-x", "--audio-format", "m4a", "-o", str(output)]
             if browser_arg:
-                args.extend(["--cookies-from-browser", browser_arg])
+                if browser_arg.startswith("file:"):
+                    args.extend(["--cookies", browser_arg[5:]])
+                else:
+                    args.extend(["--cookies-from-browser", browser_arg])
             args.append(clean_url)
             return args
 
@@ -195,7 +231,10 @@ class YouTubeDownloader:
                 "-o", pattern,
             ]
             if browser_arg:
-                args.extend(["--cookies-from-browser", browser_arg])
+                if browser_arg.startswith("file:"):
+                    args.extend(["--cookies", browser_arg[5:]])
+                else:
+                    args.extend(["--cookies-from-browser", browser_arg])
             args.append(clean_url)
             return args
 
@@ -218,7 +257,10 @@ class YouTubeDownloader:
         def build(browser_arg: str | None) -> list[str]:
             args = self._base_args() + ["--merge-output-format", "mp4", "-o", str(output_dir / "source.%(ext)s")]
             if browser_arg:
-                args.extend(["--cookies-from-browser", browser_arg])
+                if browser_arg.startswith("file:"):
+                    args.extend(["--cookies", browser_arg[5:]])
+                else:
+                    args.extend(["--cookies-from-browser", browser_arg])
             args.append(clean_url)
             return args
 
