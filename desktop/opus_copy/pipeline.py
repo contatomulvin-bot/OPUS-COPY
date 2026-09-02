@@ -59,7 +59,8 @@ class Pipeline:
         downloader = YouTubeDownloader()
         analysis_dir = self.workspace / "analysis"
         analysis_dir.mkdir(parents=True, exist_ok=True)
-        transcript_path = analysis_dir / f"transcript_{language}.json"
+        # Versioned cache key prevents an old WhisperX transcript from silently being reused.
+        transcript_path = analysis_dir / f"transcript_{language}_faster_whisper_v2.json"
 
         report("Baixando somente o áudio para análise…", 3)
         audio = downloader.download_audio(url, analysis_dir, analysis_dir / "analysis_audio.%(ext)s")
@@ -67,18 +68,24 @@ class Pipeline:
 
         transcript = self._load_cached_transcript(transcript_path)
         if transcript is None:
-            report("Transcrevendo com WhisperX local…", 17)
+            report("Transcrevendo localmente com faster-whisper…", 17)
             transcript = WhisperXTranscriber().transcribe(audio, language=language)
             save_transcript(transcript, transcript_path)
-            report("Transcrição concluída.", 50)
+            engine = transcript.get("engine", "faster-whisper")
+            device = transcript.get("device", "auto")
+            report(f"Transcrição concluída · {engine} · {device} · timestamps por palavra.", 50)
         else:
             report(f"Transcrição em cache reutilizada ({language.upper()}).", 50)
 
-        report("A IA está avaliando os melhores momentos…", 52)
+        report("A IA está avaliando ganchos, retenção e palavras-chave para YouTube…", 52)
         clips = ViralAnalyzer().rank(transcript, max_clips=max_clips)
         if not clips:
             raise ToolError("A IA não encontrou clips válidos na transcrição.")
-        report("Momentos encontrados: " + ", ".join(f"{c.score:.0f}/100" for c in clips), 60)
+        hook_summary = " · ".join(
+            f"{c.score:.0f}/100" + (f" · {', '.join(c.keywords[:3])}" if c.keywords else "")
+            for c in clips
+        )
+        report("Melhores oportunidades: " + hook_summary, 60)
 
         report("Baixando somente os trechos selecionados…", 61)
         sections_dir = self.workspace / "selected_clips"
