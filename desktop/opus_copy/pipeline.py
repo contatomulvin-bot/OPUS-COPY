@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -26,7 +27,18 @@ class Pipeline:
         except (OSError, ValueError, TypeError):
             return None
 
-    def run(self, url: str, max_clips: int = 5, progress=None) -> list[Path]:
+    @staticmethod
+    def _clip_cache_key(url: str, clip) -> str:
+        raw = f"{url.strip()}|{float(clip.start):.3f}|{float(clip.end):.3f}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+    def run(
+        self,
+        url: str,
+        max_clips: int = 5,
+        progress=None,
+        output_dir: Path | None = None,
+    ) -> list[Path]:
         self.workspace.mkdir(parents=True, exist_ok=True)
         if free_space_gb(self.workspace) < 2:
             raise ToolError("Pouco espaço livre. Libere pelo menos 2 GB antes de processar um vídeo.")
@@ -61,11 +73,24 @@ class Pipeline:
 
         report("Baixando somente os trechos selecionados…")
         sections_dir = self.workspace / "selected_clips"
-        download_workers = max(1, min(int(os.getenv("OPUS_COPY_DOWNLOAD_WORKERS", "2")), len(clips)))
+        sections_dir.mkdir(parents=True, exist_ok=True)
+        download_workers = max(
+            1,
+            min(int(os.getenv("OPUS_COPY_DOWNLOAD_WORKERS", "2")), len(clips)),
+        )
         section_paths: list[tuple[int, object, Path]] = []
-        with ThreadPoolExecutor(max_workers=download_workers, thread_name_prefix="opus-download") as executor:
+        with ThreadPoolExecutor(
+            max_workers=download_workers,
+            thread_name_prefix="opus-download",
+        ) as executor:
             futures = {
-                executor.submit(downloader.download_section, url, sections_dir, index, clip): (index, clip)
+                executor.submit(
+                    downloader.download_section,
+                    url,
+                    sections_dir,
+                    index,
+                    clip,
+                ): (index, clip)
                 for index, clip in enumerate(clips, 1)
             }
             completed = 0
@@ -77,19 +102,30 @@ class Pipeline:
 
         section_paths.sort(key=lambda item: item[0])
         report("Renderizando clips verticais 9:16 com legendas…")
-        output_dir = self.workspace / "clips"
+        final_dir = Path(output_dir) if output_dir else self.workspace / "clips"
+        final_dir.mkdir(parents=True, exist_ok=True)
         renderer = ClipRenderer()
         outputs: list[Path] = [Path() for _ in clips]
-        render_workers = max(1, min(int(os.getenv("OPUS_COPY_RENDER_WORKERS", "2")), len(clips)))
+        render_workers = max(
+            1,
+            min(int(os.getenv("OPUS_COPY_RENDER_WORKERS", "2")), len(clips)),
+        )
 
         def render_one(index: int, clip, source: Path) -> tuple[int, Path]:
-            output = output_dir / f"clip_{index:02d}_{clip.score:.0f}.mp4"
+            key = self._clip_cache_key(url, clip)
+            output = final_dir / f"clip_{index:02d}_{clip.score:.0f}_{key}.mp4"
             if output.is_file() and output.stat().st_size > 0:
                 return index, output
-            return index, renderer.render(source, clip, transcript, output)
+            return index, renderer.render_section(source, clip, transcript, output)
 
-        with ThreadPoolExecutor(max_workers=render_workers, thread_name_prefix="opus-render") as executor:
-            futures = [executor.submit(render_one, index, clip, source) for index, clip, source in section_paths]
+        with ThreadPoolExecutor(
+            max_workers=render_workers,
+            thread_name_prefix="opus-render",
+        ) as executor:
+            futures = [
+                executor.submit(render_one, index, clip, source)
+                for index, clip, source in section_paths
+            ]
             completed = 0
             for future in as_completed(futures):
                 index, output = future.result()
