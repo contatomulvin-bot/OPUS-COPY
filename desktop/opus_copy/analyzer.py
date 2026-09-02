@@ -119,7 +119,7 @@ TRANSCRIÇÃO:
 
         response = self._generate(prompt)
         text = getattr(response, "text", "") or ""
-        match = re.search(r"\{{.*\}}", text, re.DOTALL)
+        match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
             raise ToolError("A IA não retornou JSON de clips válido.")
         try:
@@ -144,8 +144,11 @@ TRANSCRIÇÃO:
                 }
                 keywords = tuple(
                     str(k).strip() for k in item.get("keywords", [])
-                    if str(k).strip()
+                    if str(k).strip() and not str(k).strip().startswith("#")
                 )[:8]
+                category = str(item.get("category", "OTHER")).upper()
+                if category not in {"STORY", "OPINION", "EDUCATION", "MOTIVATION", "HUMOR", "CONTROVERSY", "SURPRISE", "EMOTION", "FACT", "ADVICE", "OTHER"}:
+                    category = "OTHER"
                 result.append(ClipCandidate(
                     start=start,
                     end=end,
@@ -154,7 +157,7 @@ TRANSCRIÇÃO:
                     title=str(item.get("title", "Clip"))[:120],
                     hook=str(item.get("hook", ""))[:300],
                     keywords=keywords,
-                    category=str(item.get("category", "OTHER")),
+                    category=category,
                     scores=scores,
                 ))
             except (TypeError, ValueError, KeyError):
