@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -17,53 +17,41 @@ class Pipeline:
         self.workspace = workspace
 
     @staticmethod
-    def _source_signature(source: Path) -> str:
-        stat = source.stat()
-        raw = f"{source.resolve()}|{stat.st_size}|{stat.st_mtime_ns}".encode("utf-8")
-        return hashlib.sha256(raw).hexdigest()
-
-    def _load_cached_transcript(self, source: Path, path: Path) -> dict | None:
-        meta_path = path.with_suffix(".meta.json")
-        if not path.is_file() or not meta_path.is_file():
+    def _load_cached_transcript(path: Path) -> dict | None:
+        if not path.is_file() or path.stat().st_size == 0:
             return None
         try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            if meta.get("source_signature") != self._source_signature(source):
-                return None
-            return json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if data.get("segments") else None
         except (OSError, ValueError, TypeError):
             return None
 
-    def _save_cached_transcript(self, source: Path, transcript: dict, path: Path) -> None:
-        save_transcript(transcript, path)
-        meta_path = path.with_suffix(".meta.json")
-        meta_path.write_text(
-            json.dumps({"source_signature": self._source_signature(source)}, indent=2),
-            encoding="utf-8",
-        )
-
     def run(self, url: str, max_clips: int = 5, progress=None) -> list[Path]:
         self.workspace.mkdir(parents=True, exist_ok=True)
-        if free_space_gb(self.workspace) < 5:
-            raise ToolError("Pouco espaço livre. Libere pelo menos 5 GB antes de processar um vídeo.")
+        if free_space_gb(self.workspace) < 2:
+            raise ToolError("Pouco espaço livre. Libere pelo menos 2 GB antes de processar um vídeo.")
 
         def report(message: str):
             if progress:
                 progress(message)
 
-        report("Verificando yt-dlp e baixando o vídeo…")
-        source = YouTubeDownloader().download(url, self.workspace / "source")
-        report(f"Vídeo baixado: {source.name}")
+        downloader = YouTubeDownloader()
+        analysis_dir = self.workspace / "analysis"
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        transcript_path = analysis_dir / "transcript.json"
 
-        transcript_path = self.workspace / "transcript.json"
-        transcript = self._load_cached_transcript(source, transcript_path)
-        if transcript is not None:
-            report("Transcrição em cache encontrada — pulando WhisperX.")
-        else:
+        report("Baixando somente o áudio para análise…")
+        audio = downloader.download_audio(url, analysis_dir, analysis_dir / "analysis_audio.%(ext)s")
+        report("Áudio pronto. Verificando transcrição em cache…")
+
+        transcript = self._load_cached_transcript(transcript_path)
+        if transcript is None:
             report("Transcrevendo com WhisperX local…")
-            transcript = WhisperXTranscriber().transcribe(source, language="pt")
-            self._save_cached_transcript(source, transcript, transcript_path)
+            transcript = WhisperXTranscriber().transcribe(audio, language="pt")
+            save_transcript(transcript, transcript_path)
             report("Transcrição concluída.")
+        else:
+            report("Transcrição em cache reutilizada.")
 
         report("A IA está avaliando os melhores momentos…")
         clips = ViralAnalyzer().rank(transcript, max_clips=max_clips)
@@ -71,27 +59,41 @@ class Pipeline:
             raise ToolError("A IA não encontrou clips válidos na transcrição.")
         report("Momentos encontrados: " + ", ".join(f"{c.score:.0f}/100" for c in clips))
 
-        report("Renderizando clips verticais 9:16 com legendas…")
-        output_dir = self.workspace / "clips"
-        renderer = ClipRenderer()
-        outputs: list[Path] = [output_dir / f"clip_{index:02d}_{clip.score:.0f}.mp4" for index, clip in enumerate(clips, 1)]
-
-        workers = max(1, min(int(__import__("os").environ.get("OPUS_COPY_RENDER_WORKERS", "2")), len(clips)))
-
-        def render_one(index: int, clip, output: Path) -> Path:
-            if output.is_file() and output.stat().st_size > 0:
-                return output
-            return renderer.render(source, clip, transcript, output)
-
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="opus-render") as executor:
+        report("Baixando somente os trechos selecionados…")
+        sections_dir = self.workspace / "selected_clips"
+        download_workers = max(1, min(int(os.getenv("OPUS_COPY_DOWNLOAD_WORKERS", "2")), len(clips)))
+        section_paths: list[tuple[int, object, Path]] = []
+        with ThreadPoolExecutor(max_workers=download_workers, thread_name_prefix="opus-download") as executor:
             futures = {
-                executor.submit(render_one, index, clip, output): (index, output)
-                for index, (clip, output) in enumerate(zip(clips, outputs), 1)
+                executor.submit(downloader.download_section, url, sections_dir, index, clip): (index, clip)
+                for index, clip in enumerate(clips, 1)
             }
             completed = 0
             for future in as_completed(futures):
-                index, output = futures[future]
-                future.result()
+                index, clip = futures[future]
+                section_paths.append((index, clip, future.result()))
+                completed += 1
+                report(f"Trecho {completed}/{len(clips)} baixado.")
+
+        section_paths.sort(key=lambda item: item[0])
+        report("Renderizando clips verticais 9:16 com legendas…")
+        output_dir = self.workspace / "clips"
+        renderer = ClipRenderer()
+        outputs: list[Path] = [Path() for _ in clips]
+        render_workers = max(1, min(int(os.getenv("OPUS_COPY_RENDER_WORKERS", "2")), len(clips)))
+
+        def render_one(index: int, clip, source: Path) -> tuple[int, Path]:
+            output = output_dir / f"clip_{index:02d}_{clip.score:.0f}.mp4"
+            if output.is_file() and output.stat().st_size > 0:
+                return index, output
+            return index, renderer.render(source, clip, transcript, output)
+
+        with ThreadPoolExecutor(max_workers=render_workers, thread_name_prefix="opus-render") as executor:
+            futures = [executor.submit(render_one, index, clip, source) for index, clip, source in section_paths]
+            completed = 0
+            for future in as_completed(futures):
+                index, output = future.result()
+                outputs[index - 1] = output
                 completed += 1
                 report(f"Clip {completed}/{len(clips)} pronto: {output.name}")
 
