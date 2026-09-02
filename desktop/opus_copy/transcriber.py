@@ -22,7 +22,7 @@ class WhisperXTranscriber:
             raise ToolError("faster-whisper não está instalado neste ambiente Python.") from exc
         self.WhisperModel = WhisperModel
         self._model = None
-        self._model_key: tuple[str, str, str] | None = None
+        self._model_key: tuple[str, str, str, int, int] | None = None
 
     @staticmethod
     def _device_settings() -> tuple[str, str]:
@@ -45,17 +45,35 @@ class WhisperXTranscriber:
         compute = os.getenv("WHISPER_COMPUTE_TYPE", os.getenv("WHISPERX_COMPUTE_TYPE", default_compute)).strip()
         return device, compute
 
+    @staticmethod
+    def _thread_settings() -> tuple[int, int]:
+        # ctranslate2 expects integer thread counts. Passing None to cpu_threads
+        # breaks newer ctranslate2 builds even though older versions tolerated it.
+        try:
+            cpu_threads = max(0, int(os.getenv("WHISPER_CPU_THREADS", "0")))
+        except ValueError:
+            cpu_threads = 0
+        try:
+            num_workers = max(1, int(os.getenv("WHISPER_NUM_WORKERS", "1")))
+        except ValueError:
+            num_workers = 1
+        return cpu_threads, num_workers
+
     def _get_model(self, model_name: str):
         device, compute_type = self._device_settings()
-        key = (model_name, device, compute_type)
+        cpu_threads, num_workers = self._thread_settings()
+        key = (model_name, device, compute_type, cpu_threads, num_workers)
         if self._model is None or self._model_key != key:
-            self._model = self.WhisperModel(
-                model_name,
-                device=device,
-                compute_type=compute_type,
-                cpu_threads=int(os.getenv("WHISPER_CPU_THREADS", "0")) or None,
-                num_workers=max(1, int(os.getenv("WHISPER_NUM_WORKERS", "1"))),
-            )
+            kwargs = {
+                "device": device,
+                "compute_type": compute_type,
+                "num_workers": num_workers,
+            }
+            # Never pass None: ctranslate2's current Whisper constructor requires
+            # an integer for intra_threads. Zero means automatic/default threading.
+            if cpu_threads > 0:
+                kwargs["cpu_threads"] = cpu_threads
+            self._model = self.WhisperModel(model_name, **kwargs)
             self._model_key = key
         return self._model, device, compute_type
 
