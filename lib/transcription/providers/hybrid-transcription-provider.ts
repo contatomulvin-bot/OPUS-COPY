@@ -1,6 +1,6 @@
 import { TranscriptionProvider, TranscriptionResult } from '../transcription-provider';
 import { WhisperXTranscriptionProvider } from './whisperx-transcription-provider';
-import { defaultGeminiTranscriptionProvider } from './gemini-transcription-provider';
+import { defaultTranscriptionProvider as defaultGeminiTranscriptionProvider } from './gemini-transcription-provider';
 
 export class HybridTranscriptionProvider implements TranscriptionProvider {
   name = 'WhisperX local + Gemini fallback';
