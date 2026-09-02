@@ -113,7 +113,16 @@ class MainWindow(QMainWindow):
     def failed(self, message: str) -> None:
         self.start.setEnabled(True)
         self.status.setText("Falha no processamento.")
-        QMessageBox.critical(self, "OPUS-COPY — erro", message)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Critical)
+        box.setWindowTitle("OPUS-COPY — erro")
+        box.setText("O processamento falhou.")
+        box.setDetailedText(message)
+        copy_button = box.addButton("Copiar erro completo", QMessageBox.ActionRole)
+        box.addButton(QMessageBox.Close)
+        box.exec()
+        if box.clickedButton() is copy_button:
+            QApplication.clipboard().setText(message)
 
 
 def main() -> int:
