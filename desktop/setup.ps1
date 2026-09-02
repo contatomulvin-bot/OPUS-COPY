@@ -14,12 +14,13 @@ if (-not (Test-Path (Join-Path $venv 'Scripts\python.exe'))) {
 $venvPython = Join-Path $venv 'Scripts\python.exe'
 & $venvPython -m pip install --upgrade pip
 & $venvPython -m pip install -r desktop\requirements.txt
+if ($LASTEXITCODE -ne 0) { throw 'A instalação das dependências Python falhou.' }
 
-& $venvPython -c "import PySide6, yt_dlp, whisperx; import bgutil_ytdlp_pot_provider; print('Desktop dependencies OK')"
+& $venvPython -c "import PySide6, yt_dlp, whisperx; print('Desktop dependencies OK')"
 if ($LASTEXITCODE -ne 0) { throw 'A validação das dependências falhou.' }
 
 # YouTube PO Token provider. yt-dlp's current YouTube guidance recommends
-# using a provider plugin, and bgutil can run its provider script through Node.
+# using a provider plugin; bgutil can run its provider script through Node.
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
   $winget = Get-Command winget -ErrorAction SilentlyContinue
@@ -41,14 +42,16 @@ if (-not $node) { throw 'Node.js LTS não pôde ser encontrado após a instalaç
 
 $potRoot = Join-Path $env:USERPROFILE 'bgutil-ytdlp-pot-provider'
 if (-not (Test-Path (Join-Path $potRoot '.git'))) {
-  Write-Host 'Baixando bgutil-ytdlp-pot-provider 1.3.1...' -ForegroundColor Yellow
-  & git clone --depth 1 --branch 1.3.1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git $potRoot
+  Write-Host 'Baixando bgutil-ytdlp-pot-provider 1.3.2...' -ForegroundColor Yellow
+  & git clone --depth 1 --branch 1.3.2 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git $potRoot
+  if ($LASTEXITCODE -ne 0) { throw 'Não foi possível baixar o PO Token Provider.' }
 } else {
   Write-Host 'Atualizando bgutil-ytdlp-pot-provider...' -ForegroundColor Yellow
   Push-Location $potRoot
-  & git fetch --depth 1 origin tag 1.3.1
-  & git checkout --force 1.3.1
+  & git fetch --depth 1 origin tag 1.3.2
+  & git checkout --force 1.3.2
   Pop-Location
+  if ($LASTEXITCODE -ne 0) { throw 'Não foi possível atualizar o PO Token Provider.' }
 }
 
 $potServer = Join-Path $potRoot 'server'
@@ -58,17 +61,15 @@ if (-not (Test-Path (Join-Path $potServer 'package.json'))) {
 
 Push-Location $potServer
 & npm ci
+if ($LASTEXITCODE -ne 0) { Pop-Location; throw 'A instalação do Node.js do PO Token Provider falhou.' }
 & npx tsc
+$compileCode = $LASTEXITCODE
 Pop-Location
-if ($LASTEXITCODE -ne 0) { throw 'A compilação do PO Token Provider falhou.' }
+if ($compileCode -ne 0) { throw 'A compilação do PO Token Provider falhou.' }
 
-# The provider plugin discovers this default location automatically.
-$env:BGUTIL_YTDLP_PROVIDER_HOME = $potRoot
-
-Write-Host 'Validando PO Token Provider...' -ForegroundColor Yellow
-$probe = & $venvPython -m yt_dlp --version
+Write-Host 'Validando instalação do PO Token Provider...' -ForegroundColor Yellow
+& $venvPython -m yt_dlp -v --ignore-config --version 2>&1 | Select-String -Pattern 'yt-dlp|bgutil' | Select-Object -First 10
 if ($LASTEXITCODE -ne 0) { throw 'Não foi possível executar o yt-dlp do ambiente desktop.' }
-Write-Host "yt-dlp: $probe"
 
 Write-Host 'Setup concluído com suporte a PO Token.' -ForegroundColor Green
 Write-Host 'Para iniciar:' -ForegroundColor Green
