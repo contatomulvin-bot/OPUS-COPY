@@ -1,0 +1,6 @@
+{
+  "name": "AI Clipper",
+  "description": "Transforme vídeos longos em Shorts verticais 9:16 com transcrição, análise por IA Gemini, recorte inteligente e legendas automáticas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
