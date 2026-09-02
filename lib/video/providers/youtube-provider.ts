@@ -29,11 +29,15 @@ export class YouTubeProvider {
   constructor(storage: StorageProvider) {
     this.storage = storage;
 
-    const localBin = path.resolve(process.cwd(), 'bin', 'yt-dlp');
+    // On Windows, do not select the repository's extensionless Unix binary.
+    // Prefer a Windows local binary when present, otherwise use yt-dlp from PATH.
+    const isWindows = process.platform === 'win32';
+    const localBin = path.resolve(process.cwd(), 'bin', isWindows ? 'yt-dlp.exe' : 'yt-dlp');
+
     if (fs.existsSync(localBin)) {
       this.ytDlpPath = localBin;
     } else {
-      this.ytDlpPath = 'yt-dlp';
+      this.ytDlpPath = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
     }
   }
 
