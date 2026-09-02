@@ -22,7 +22,6 @@ def _escape_subtitle_path(path: Path) -> str:
 
 def write_srt(transcript: dict, clip: ClipCandidate, path: Path) -> None:
     entries = []
-    index = 1
     for segment in transcript.get("segments", []):
         start = float(segment.get("start", 0))
         end = float(segment.get("end", 0))
@@ -30,8 +29,7 @@ def write_srt(transcript: dict, clip: ClipCandidate, path: Path) -> None:
             continue
         words = segment.get("words") or []
         if words:
-            # Group up to ~7 words so captions remain readable on vertical video.
-            group = []
+            group: list[str] = []
             group_start = None
             group_end = None
             for word in words:
@@ -46,7 +44,6 @@ def write_srt(transcript: dict, clip: ClipCandidate, path: Path) -> None:
                 group_end = we
                 if len(group) >= 7:
                     entries.append((group_start - clip.start, group_end - clip.start, " ".join(group)))
-                    index += 1
                     group, group_start, group_end = [], None, None
             if group and group_start is not None and group_end is not None:
                 entries.append((group_start - clip.start, group_end - clip.start, " ".join(group)))
@@ -56,7 +53,8 @@ def write_srt(transcript: dict, clip: ClipCandidate, path: Path) -> None:
     path.write_text(
         "\n\n".join(
             f"{i}\n{_srt_time(s)} --> {_srt_time(e)}\n{text}"
-            for i, (s, e, text) in enumerate(entries, 1) if text
+            for i, (s, e, text) in enumerate(entries, 1)
+            if text
         ) + "\n",
         encoding="utf-8",
     )
@@ -71,9 +69,8 @@ class ClipRenderer:
         srt = output.with_suffix(".srt")
         write_srt(transcript, clip, srt)
 
-        # Center crop to 9:16, scale to 1080x1920, then burn readable captions.
         subtitle_filter = f"subtitles='{_escape_subtitle_path(srt)}'"
-        vf = f"crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920:flags=lanczos,{subtitle_filter}"
+        vf = f"crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920:flags=fast_bilinear,{subtitle_filter}"
         duration = clip.end - clip.start
         args = [
             self.ffmpeg, "-y",
@@ -82,14 +79,14 @@ class ClipRenderer:
             "-t", f"{duration:.3f}",
             "-vf", vf,
             "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "20",
+            "-preset", "veryfast",
+            "-crf", "21",
             "-c:a", "aac",
-            "-b:a", "160k",
+            "-b:a", "128k",
             "-movflags", "+faststart",
             str(output),
         ]
-        result = run_process(args, timeout=max(600, int(duration * 20)))
+        result = run_process(args, timeout=max(600, int(duration * 15)))
         if result.returncode != 0:
             raise ToolError(f"FFmpeg falhou ao renderizar o clip:\n{result.stderr.strip()}")
         if not output.exists() or output.stat().st_size == 0:
