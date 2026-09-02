@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 from .tools import ToolError, require_executable, run_process
@@ -22,6 +23,8 @@ class YouTubeDownloader:
             "login_required",
             "http error 403",
             "403 forbidden",
+            "requested format is not available",
+            "no formats found",
         )
         return any(marker in lowered for marker in markers)
 
@@ -52,8 +55,6 @@ class YouTubeDownloader:
         local = Path(os.getenv("LOCALAPPDATA", ""))
         roaming = Path(os.getenv("APPDATA", ""))
         candidates = (
-            # Firefox does not use Chromium's Windows cookie encryption and is
-            # therefore a safer automatic browser fallback on affected systems.
             ("firefox", roaming / "Mozilla" / "Firefox" / "Profiles"),
             ("brave", local / "BraveSoftware" / "Brave-Browser" / "User Data"),
             ("chrome", local / "Google" / "Chrome" / "User Data"),
@@ -98,9 +99,15 @@ class YouTubeDownloader:
 
     @staticmethod
     def _browser_attempts() -> list[tuple[str, str]]:
+        """Return browser cookie fallbacks only when explicitly requested.
+
+        Chromium DPAPI failures must not make every YouTube download noisy or
+        slow. Anonymous downloads are attempted first; users who need account
+        cookies can opt in with OPUS_COPY_YOUTUBE_COOKIES_BROWSER.
+        """
         configured = os.getenv("OPUS_COPY_YOUTUBE_COOKIES_BROWSER", "").strip()
         if not configured:
-            return YouTubeDownloader._windows_browser_profiles()
+            return []
         attempts: list[tuple[str, str]] = []
         for raw in configured.split(","):
             value = raw.strip()
@@ -122,6 +129,29 @@ class YouTubeDownloader:
         return path if path.is_file() else None
 
     @staticmethod
+    def _js_runtime_args() -> list[str]:
+        """Enable yt-dlp's current JS challenge solver when a supported runtime exists."""
+        configured = os.getenv("OPUS_COPY_YOUTUBE_JS_RUNTIME", "").strip()
+        if configured:
+            return ["--js-runtimes", configured]
+
+        deno = shutil.which("deno")
+        if deno:
+            return ["--js-runtimes", f"deno:{deno}"]
+
+        node = shutil.which("node")
+        if node:
+            try:
+                result = run_process([node, "--version"], timeout=10)
+                version = (result.stdout or "").strip().lstrip("v")
+                major = int(version.split(".", 1)[0]) if version else 0
+            except (ValueError, OSError):
+                major = 0
+            if major >= 22:
+                return ["--js-runtimes", f"node:{node}"]
+        return []
+
+    @staticmethod
     def _pot_provider_home() -> Path | None:
         configured = os.getenv("OPUS_COPY_POT_PROVIDER_HOME", "").strip()
         root = Path(configured).expanduser() if configured else Path(os.getenv("USERPROFILE", "")) / "bgutil-ytdlp-pot-provider"
@@ -132,6 +162,7 @@ class YouTubeDownloader:
 
     def _base_args(self) -> list[str]:
         args = [self.executable, "--no-playlist", "--newline", "--no-warnings", "--no-part"]
+        args.extend(self._js_runtime_args())
         provider_home = self._pot_provider_home()
         if provider_home:
             args.extend(["--extractor-args", f"youtubepot-bgutilscript:server_home={provider_home}"])
@@ -173,6 +204,8 @@ class YouTubeDownloader:
             raise ToolError(f"Falha no {purpose} do YouTube.\n\n{combined or 'yt-dlp encerrou sem informar o erro.'}")
         provider = self._pot_provider_home()
         provider_text = f"PO Token Provider detectado em: {provider}" if provider else "PO Token Provider não encontrado. Execute .\\desktop\\setup.ps1."
+        runtime = self._js_runtime_args()
+        runtime_text = f"JS runtime ativo: {runtime[-1]}" if runtime else "Nenhum JS runtime compatível detectado (Deno >=2.3 ou Node >=22 recomendado pelo yt-dlp)."
         cookie_text = (
             "Se o vídeo exigir login, configure OPUS_COPY_YOUTUBE_COOKIES_FILE apontando para um cookies.txt exportado do navegador."
             if not cookie_file
@@ -181,7 +214,7 @@ class YouTubeDownloader:
         raise ToolError(
             "Não foi possível concluir o " + purpose + " pelo YouTube.\n\n"
             + "\n".join(errors)
-            + f"\n\n{provider_text}\n{cookie_text}"
+            + f"\n\n{provider_text}\n{runtime_text}\n{cookie_text}"
         )
 
     def download_audio(self, url: str, output_dir: Path, output: Path | None = None) -> Path:
@@ -244,7 +277,6 @@ class YouTubeDownloader:
 
         return self._run_with_browser_fallbacks(build, output_dir, check, f"download do trecho {index}")
 
-    # Full-video download remains available as a compatibility/fallback path.
     def download(self, url: str, output_dir: Path, progress_callback=None) -> Path:
         clean_url = url.strip()
         if not clean_url:
