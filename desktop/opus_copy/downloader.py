@@ -67,10 +67,12 @@ class YouTubeDownloader:
     def _js_runtime_args() -> list[str]:
         configured = os.getenv("OPUS_COPY_YOUTUBE_JS_RUNTIME", "").strip()
         if configured:
-            return ["--js-runtimes", configured]
-        deno = shutil.which("deno")
-        if deno:
-            return ["--js-runtimes", f"deno:{deno}"]
+            return ["--no-js-runtimes", "--js-runtimes", configured]
+
+        # yt-dlp enables Deno by default and gives it priority over Node.  The
+        # bgutil Deno script has a hard 15-second startup check and can time out
+        # on Windows even though the precompiled Node provider is ready.  Clear
+        # the default runtime list before explicitly selecting Node.
         node = shutil.which("node")
         if node:
             try:
@@ -80,7 +82,11 @@ class YouTubeDownloader:
             except (ValueError, OSError):
                 major = 0
             if major >= 22:
-                return ["--js-runtimes", f"node:{node}"]
+                return ["--no-js-runtimes", "--js-runtimes", f"node:{node}"]
+
+        deno = shutil.which("deno")
+        if deno:
+            return ["--no-js-runtimes", "--js-runtimes", f"deno:{deno}"]
         return []
 
     @staticmethod
@@ -93,7 +99,7 @@ class YouTubeDownloader:
         return None
 
     def _base_args(self) -> list[str]:
-        args = [self.executable, "--no-playlist", "--newline", "--no-warnings", "--no-part"]
+        args = [self.executable, "--ignore-config", "--no-playlist", "--newline", "--no-warnings", "--no-part"]
         args.extend(self._js_runtime_args())
         provider_home = self._pot_provider_home()
         if provider_home:
