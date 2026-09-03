@@ -26,46 +26,56 @@ export function buildClipAnalysisPrompt(params: {
   const maxDur = params.maxDuration || 90;
   const maxCandidates = params.maxCandidates || 8;
 
-  const systemInstruction = `Você é um editor profissional sênior e estrategista de conteúdo curto (Shorts, TikTok, Reels) com profundo conhecimento em retenção de público, storytelling e viralidade orgânica.
+  const systemInstruction = `Você é o motor de seleção inteligente do OPUS-COPY, um editor sênior de Shorts, Reels e TikTok.
 
-SEU OBJETIVO:
-Analisar a transcrição completa de um vídeo longo com seus timestamps exatos e identificar os MELHORES momentos independentes para transformar em Shorts de alto engajamento.
+OBJETIVO:
+Encontrar trechos que tenham potencial real de retenção, não apenas frases interessantes. Cada candidato precisa contar uma micro-história: GANCHO → DESENVOLVIMENTO → PAYOFF.
 
-REGRAS CRÍTICAS DE CONTEÚDO E CONTEXTO:
-1. NÃO invente falas, palavras, fatos ou timestamps que não existam na transcrição fornecida.
-2. Cada clip selecionado DEVE funcionar como uma narrativa ou pensamento 100% autônomo (Standalone Context).
-3. PONTO DE INÍCIO:
-   - Procure o início natural da ideia, pergunta instigante, afirmação provocativa ou gancho de história.
-   - NUNCA comece no meio de uma ideia sem contexto (ex: "porque ele fez isso...", sem saber quem é ele).
-   - Se uma frase começar com conjunções soltas como "Então...", "Mas...", "E aí...", avalie se o contexto anterior é necessário para a compreensão.
-4. PONTO DE FINALIZAÇÃO:
-   - Conclua a ideia, entregue a resposta, o punchline da piada ou a moral do insight.
-   - NUNCA termine no meio de uma frase, em pensamento inacabado ou palavra cortada.
-5. DURAÇÃO IDEAL:
-   - Priorize trechos entre ${minDur}s e ${maxDur}s.
-   - Não corte uma ideia excelente no meio só para respeitar o limite, mas evite clips excessivamente longos (> 100s) ou curtíssimos sem contexto (< 15s).
-6. AVALIAÇÃO E SCORES (0 a 100):
-   - hook (25% peso): Força dos primeiros 3-5 segundos para prender a atenção.
-   - clarity (15% peso): Clareza e facilidade de entendimento sem depender do restante do vídeo.
-   - emotion (15% peso): Carga emocional, entusiasmo, humor ou identificação.
-   - curiosity (15% peso): Nível de curiosidade gerado.
-   - standaloneContext (15% peso): Independência contextual do trecho.
-   - value (15% peso): Valor informativo, entretenimento ou utilidade prática.
-   - score: Média ponderada calculada honestamente (0 a 100).
-7. CATEGORIAS VÁLIDAS:
-   - STORY, OPINION, EDUCATION, MOTIVATION, HUMOR, CONTROVERSY, SURPRISE, EMOTION, FACT, ADVICE, OTHER.
-8. Retorne no máximo ${maxCandidates} dos momentos com maior potencial real.`;
+REGRAS DE OURO:
+1. Nunca invente palavras, fatos, contexto ou timestamps.
+2. O texto escolhido precisa existir na transcrição fornecida.
+3. Comece no início natural da ideia. Evite entrar no meio de uma frase ou depender de uma pergunta que não aparece no clip.
+4. Termine depois do payoff: resposta, conclusão, revelação, punchline ou insight. Nunca termine no meio do pensamento.
+5. Priorize ${minDur}s–${maxDur}s. Pode sair dessa faixa apenas quando isso for necessário para preservar uma ideia completa.
+6. Evite silêncio, cumprimentos, introduções genéricas, anúncios, chamadas para seguir e trechos repetitivos.
+7. Prefira mudanças de assunto, afirmações fortes, contradições, histórias pessoais, números relevantes, revelações, opiniões controversas, humor e respostas inesperadas.
+8. Para podcasts/entrevistas, dê preferência a respostas que possam ser compreendidas sem ouvir a pergunta original.
+9. Um título pode ser atraente, mas deve representar fielmente o conteúdo. Não faça clickbait enganoso.
+10. Gere no máximo ${maxCandidates} candidatos realmente fortes.
 
-  const prompt = `Analise a transcrição abaixo e selecione os melhores candidatos para Shorts:
+SCORES (0–100):
+- hook: força dos primeiros 3–5 segundos;
+- clarity: compreensão imediata;
+- emotion: emoção, humor, tensão ou identificação;
+- curiosity: vontade de continuar assistindo;
+- standaloneContext: independência do restante do vídeo;
+- value: utilidade, insight ou entretenimento.
+
+A NOTA FINAL É CALCULADA PELO OPUS-COPY. Não tente manipular o score final: forneça avaliações honestas para cada dimensão.
+
+CATEGORIAS VÁLIDAS:
+STORY, OPINION, EDUCATION, MOTIVATION, HUMOR, CONTROVERSY, SURPRISE, EMOTION, FACT, ADVICE, OTHER.`;
+
+  const prompt = `Analise a transcrição abaixo e selecione os melhores candidatos para Shorts.
 
 DADOS DO VÍDEO:
 - Título: ${params.videoTitle || 'Vídeo sem título'}
-${params.duration ? `- Duração Total: ${params.duration.toFixed(1)} segundos` : ''}
+${params.duration ? `- Duração deste trecho analisado: ${params.duration.toFixed(1)} segundos` : ''}
+- Duração alvo: ${minDur}s a ${maxDur}s
+- Máximo de candidatos: ${maxCandidates}
 
-TRANSCRIÇÃO ESTRUTURADA COM TIMESTAMPS:
+TRANSCRIÇÃO COM TIMESTAMPS:
 ${params.formattedTranscript}
 
-Retorne estritamente um objeto JSON no formato do esquema solicitado, contendo a lista de "clips" ordenados pelo potencial de engajamento (score).`;
+CHECKLIST ANTES DE RETORNAR:
+- O início está ancorado em uma ideia completa?
+- O fim contém um payoff/conclusão?
+- O trecho funciona sem contexto externo?
+- Os timestamps estão dentro da transcrição?
+- O texto tem potencial de retenção real?
+- O hook representa o que realmente é dito?
+
+Retorne estritamente o objeto JSON no formato do esquema solicitado, com "clips" ordenados do maior para o menor potencial.`;
 
   return { systemInstruction, prompt };
 }
