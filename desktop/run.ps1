@@ -4,4 +4,4 @@ $python = Join-Path (Get-Location) 'desktop\.venv\Scripts\python.exe'
 if (-not (Test-Path $python)) {
   throw 'Ambiente desktop não configurado. Execute .\desktop\setup.ps1 primeiro.'
 }
-& $python desktop\main.py
+& $python desktop\responsive_launcher.py
