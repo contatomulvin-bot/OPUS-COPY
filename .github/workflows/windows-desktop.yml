@@ -1,0 +1,94 @@
+name: Windows desktop validation
+
+on:
+  push:
+    branches:
+      - fix/windows-startup-transcription-icon
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    name: Test and build on Windows
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: desktop/requirements.txt
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install desktop dependencies
+        shell: pwsh
+        run: |
+          python -m venv desktop\.venv
+          $python = (Resolve-Path desktop\.venv\Scripts\python.exe).Path
+          & $python -m pip install --upgrade pip
+          & $python -m pip install -r desktop\requirements.txt
+
+      - name: Run Python tests
+        shell: pwsh
+        run: |
+          $python = (Resolve-Path desktop\.venv\Scripts\python.exe).Path
+          $env:PYTHONPATH = (Resolve-Path desktop).Path
+          & $python -m unittest discover -s desktop\tests -v
+
+      - name: Verify YouTube downloader isolation
+        shell: pwsh
+        run: |
+          $python = (Resolve-Path desktop\.venv\Scripts\python.exe).Path
+          $env:PYTHONPATH = (Resolve-Path desktop).Path
+          & $python -c "from opus_copy.downloader import YouTubeDownloader; d=YouTubeDownloader(); a=d._base_args(); assert '--no-plugin-dirs' in a; assert 'bgutil' not in ' '.join(a).lower(); print('yt-dlp isolado de plugins externos:', ' '.join(a))"
+
+      - name: Build Windows executable
+        shell: pwsh
+        run: .\desktop\build.ps1
+
+      - name: Verify packaged command-line tools
+        shell: pwsh
+        run: |
+          $runtime = (Resolve-Path desktop\dist\OPUS-COPY\runtime).Path
+          & (Join-Path $runtime 'yt-dlp.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'O yt-dlp empacotado falhou.' }
+          & (Join-Path $runtime 'ffmpeg.exe') -version
+          if ($LASTEXITCODE -ne 0) { throw 'O FFmpeg empacotado falhou.' }
+          & (Join-Path $runtime 'ffprobe.exe') -version
+          if ($LASTEXITCODE -ne 0) { throw 'O FFprobe empacotado falhou.' }
+
+      - name: Verify packaged application starts
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path desktop\dist\OPUS-COPY\OPUS-COPY.exe).Path
+          $process = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 10
+          if ($process.HasExited) {
+            throw "OPUS-COPY.exe encerrou durante o smoke test com código $($process.ExitCode)."
+          }
+          Stop-Process -Id $process.Id -Force
+
+      - name: Upload tested Windows build
+        uses: actions/upload-artifact@v6
+        with:
+          name: OPUS-COPY-Windows-${{ github.run_number }}
+          path: desktop/dist/OPUS-COPY
+          if-no-files-found: error
+          retention-days: 14

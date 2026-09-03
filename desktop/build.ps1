@@ -26,8 +26,22 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $icoPath)) {
   throw 'Falha ao criar o ícone do Windows a partir da logo.'
 }
 
-# Copy external command-line tools into the build output when available.
-foreach ($name in @('yt-dlp.exe', 'ffmpeg.exe', 'ffprobe.exe')) {
+# The pip-generated yt-dlp.exe launcher points back to this virtual
+# environment and is not portable.  Ship yt-dlp's official standalone Windows
+# executable so the packaged application also works on a clean computer.
+$ytDlpPath = Join-Path $runtimeDir 'yt-dlp.exe'
+$ytDlpUrl = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
+Write-Host 'Baixando o executável independente oficial do yt-dlp...' -ForegroundColor Yellow
+Invoke-WebRequest -Uri $ytDlpUrl -OutFile $ytDlpPath -UseBasicParsing
+if (-not (Test-Path $ytDlpPath)) {
+  throw 'Não foi possível incluir o yt-dlp independente no build.'
+}
+& $ytDlpPath --version
+if ($LASTEXITCODE -ne 0) { throw 'O yt-dlp independente incluído no build não executou corretamente.' }
+Write-Host 'Runtime incluído: yt-dlp.exe' -ForegroundColor Green
+
+# FFmpeg and FFprobe are native standalone binaries on Windows.
+foreach ($name in @('ffmpeg.exe', 'ffprobe.exe')) {
   $command = Get-Command ($name -replace '\.exe$','') -ErrorAction SilentlyContinue
   if ($command) {
     Copy-Item $command.Source (Join-Path $runtimeDir $name) -Force
@@ -47,6 +61,13 @@ if (-not (Test-Path $distDir)) { throw "Pasta de saída não encontrada: $distDi
 New-Item -ItemType Directory -Force -Path (Join-Path $distDir 'runtime') | Out-Null
 if (Test-Path $runtimeDir) {
   Copy-Item (Join-Path $runtimeDir '*') (Join-Path $distDir 'runtime') -Force -ErrorAction SilentlyContinue
+}
+
+foreach ($name in @('yt-dlp.exe', 'ffmpeg.exe', 'ffprobe.exe')) {
+  $packagedTool = Join-Path (Join-Path $distDir 'runtime') $name
+  if (-not (Test-Path $packagedTool)) {
+    throw "Ferramenta obrigatória ausente do pacote: $name"
+  }
 }
 
 Write-Host ''
