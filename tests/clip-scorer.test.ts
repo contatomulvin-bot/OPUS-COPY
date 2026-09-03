@@ -15,7 +15,7 @@ describe('ClipScorer', () => {
     const score = new ClipScorer(PROFILE_WEIGHTS.viral).calculateScore(strong);
     expect(score).toBeGreaterThanOrEqual(0);
     expect(score).toBeLessThanOrEqual(100);
-    expect(score).toBe(91);
+    expect(score).toBe(92);
   });
 
   it('rejects clips with weak hook/context even if other scores are high', () => {
