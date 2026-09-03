@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QBoxLayout, QTimer
-from PySide6.QtWidgets import QLabel
+from PySide6.QtCore import QBoxLayout, QTimer, Qt
+from PySide6.QtWidgets import QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
@@ -25,35 +26,162 @@ def _metadata_for(filename: str) -> dict | None:
 
 
 class AnalyticsVideoCard(app_main.VideoCard):
-    """Video card with transparent AI/editorial analytics."""
+    """Professional clip card: preview first, AI potential below, export last."""
 
     def __init__(self, path: Path, parent=None) -> None:
         super().__init__(path, parent)
-        metadata = _metadata_for(path.name)
-        if not metadata:
+        self.metadata = _metadata_for(path.name) or {}
+        self._reorganize_card()
+
+    def _reorganize_card(self) -> None:
+        layout = self.layout()
+        if layout is None:
             return
-        stats = metadata.get("statistics") or {}
-        score = float(metadata.get("score", 0) or 0)
-        category = str(metadata.get("category", "OTHER"))
-        duration = stats.get("duration_label", "--:--")
-        wpm = stats.get("words_per_minute", 0)
-        density = stats.get("speech_density", 0)
-        keywords = ", ".join(metadata.get("keywords") or [])
-        box = QLabel()
-        box.setWordWrap(True)
-        box.setStyleSheet("QLabel { background:#111115; border:1px solid #292930; border-radius:14px; padding:11px; color:#d7d7dc; }")
-        box.setText(
-            f"<b>POTENCIAL DE AUDIÊNCIA · {score:.0f}/100</b>  ·  {category}<br>"
-            f"Duração <b>{duration}</b>  ·  Ritmo <b>{wpm:.0f} palavras/min</b>  ·  Densidade <b>{density:.0f}%</b><br>"
-            f"<span style='color:#9898a3'>Palavras-chave:</span> {keywords or '—'}"
-        )
-        self.layout().addWidget(box)
-        breakdown = stats.get("score_breakdown") or metadata.get("scores") or {}
+
+        original_row = None
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            row = item.layout()
+            if isinstance(row, QHBoxLayout):
+                texts = []
+                for j in range(row.count()):
+                    widget = row.itemAt(j).widget()
+                    if widget is not None:
+                        texts.append(widget.text())
+                if any("REPRODUZIR" in text for text in texts):
+                    original_row = row
+                    break
+        if original_row is not None:
+            while original_row.count():
+                item = original_row.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            layout.removeItem(original_row)
+
+        stats = self.metadata.get("statistics") or {}
+        score = max(0.0, min(100.0, float(self.metadata.get("score", stats.get("viral_potential", 0)) or 0)))
+        category = str(self.metadata.get("category", "OTHER")).replace("_", " ").title()
+        duration = str(stats.get("duration_label", "--:--"))
+        wpm = float(stats.get("words_per_minute", 0) or 0)
+        density = float(stats.get("speech_density", 0) or 0)
+        breakdown = stats.get("score_breakdown") or self.metadata.get("scores") or {}
+
+        panel = QFrame()
+        panel.setObjectName("viralPanel")
+        panel.setStyleSheet("QFrame#viralPanel { background:#121216; border:1px solid #29292f; border-radius:16px; }")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(14, 13, 14, 13)
+        panel_layout.setSpacing(9)
+
+        heading = QHBoxLayout()
+        title = QLabel("POTENCIAL DE VIRALIZAÇÃO")
+        title.setStyleSheet("font-size:11px; font-weight:700; letter-spacing:1.2px; color:#9b9ba4;")
+        heading.addWidget(title)
+        heading.addStretch(1)
+        badge = QLabel(self._score_label(score))
+        badge.setStyleSheet("font-size:11px; font-weight:700; color:#f5f5f7; background:#25252b; border:1px solid #38383f; border-radius:9px; padding:4px 8px;")
+        heading.addWidget(badge)
+        panel_layout.addLayout(heading)
+
+        score_row = QHBoxLayout()
+        score_value = QLabel(f"{score:.0f}<span style='font-size:13px; color:#888891'>/100</span>")
+        score_value.setTextFormat(Qt.TextFormat.RichText)
+        score_value.setStyleSheet("font-size:27px; font-weight:750; color:#f5f5f7;")
+        score_row.addWidget(score_value)
+        score_bar = QProgressBar()
+        score_bar.setRange(0, 100)
+        score_bar.setValue(round(score))
+        score_bar.setTextVisible(False)
+        score_bar.setFixedHeight(8)
+        score_bar.setStyleSheet("QProgressBar { background:#24242a; border:none; border-radius:4px; } QProgressBar::chunk { background:#f5f5f7; border-radius:4px; }")
+        score_row.addWidget(score_bar, 1)
+        panel_layout.addLayout(score_row)
+
+        metrics = QGridLayout()
+        metrics.setHorizontalSpacing(8)
+        metrics.setVerticalSpacing(7)
+        metric_values = [
+            ("DURAÇÃO", duration),
+            ("RITMO", f"{wpm:.0f} wpm"),
+            ("DENSIDADE", f"{density:.0f}%"),
+            ("CATEGORIA", category),
+        ]
+        for index, (label, value) in enumerate(metric_values):
+            cell = QFrame()
+            cell.setStyleSheet("QFrame { background:#19191e; border:1px solid #26262d; border-radius:10px; }")
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(9, 7, 9, 7)
+            cell_layout.setSpacing(1)
+            lab = QLabel(label)
+            lab.setStyleSheet("font-size:9px; font-weight:700; color:#777780;")
+            val = QLabel(value)
+            val.setStyleSheet("font-size:12px; font-weight:650; color:#e5e5e9;")
+            val.setWordWrap(True)
+            cell_layout.addWidget(lab)
+            cell_layout.addWidget(val)
+            metrics.addWidget(cell, index // 2, index % 2)
+        panel_layout.addLayout(metrics)
+
         if breakdown:
-            detail = QLabel("  ·  ".join(f"{str(k).title()}: {float(v):.0f}" for k, v in breakdown.items()))
-            detail.setObjectName("muted")
+            detail = QLabel("  ·  ".join(f"{str(k).replace('_', ' ').title()}: {float(v):.0f}" for k, v in breakdown.items()))
             detail.setWordWrap(True)
-            self.layout().addWidget(detail)
+            detail.setStyleSheet("font-size:10px; color:#777780;")
+            panel_layout.addWidget(detail)
+
+        keywords = ", ".join(self.metadata.get("keywords") or [])
+        if keywords:
+            kw = QLabel(f"Palavras-chave  ·  {keywords}")
+            kw.setWordWrap(True)
+            kw.setStyleSheet("font-size:10px; color:#85858e;")
+            panel_layout.addWidget(kw)
+
+        layout.addWidget(panel)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        play = QPushButton("▶  REPRODUZIR")
+        play.clicked.connect(self.toggle)
+        actions.addWidget(play, 1)
+        open_file = QPushButton("ABRIR")
+        open_file.clicked.connect(self.open_file)
+        actions.addWidget(open_file)
+        export = QPushButton("EXPORTAR CLIP")
+        export.setObjectName("primary")
+        export.clicked.connect(self.export_clip)
+        actions.addWidget(export, 1)
+        layout.addLayout(actions)
+
+    @staticmethod
+    def _score_label(score: float) -> str:
+        if score >= 80:
+            return "ALTO POTENCIAL"
+        if score >= 60:
+            return "BOM POTENCIAL"
+        if score >= 40:
+            return "MÉDIO POTENCIAL"
+        return "BAIXO POTENCIAL"
+
+    def export_clip(self) -> None:
+        if not self.path.is_file():
+            QMessageBox.warning(self, "Exportação", "O arquivo deste clip não foi encontrado.")
+            return
+        destination, _ = QFileDialog.getSaveFileName(
+            self,
+            "Exportar clip",
+            str(Path.home() / "Downloads" / self.path.name),
+            "Vídeo MP4 (*.mp4)",
+        )
+        if not destination:
+            return
+        try:
+            target = Path(destination)
+            if target.suffix.lower() != ".mp4":
+                target = target.with_suffix(".mp4")
+            if target.resolve() != self.path.resolve():
+                shutil.copy2(self.path, target)
+            QMessageBox.information(self, "Exportação concluída", f"Clip exportado com sucesso:\n\n{target}")
+        except OSError as exc:
+            QMessageBox.critical(self, "Falha na exportação", f"Não foi possível exportar o clip.\n\n{exc}")
 
 
 class ResponsiveMainWindow(app_main.MainWindow):
@@ -97,13 +225,12 @@ class ResponsiveMainWindow(app_main.MainWindow):
         if current_outputs:
             files = [self.output_dir / name for name in current_outputs if (self.output_dir / name).is_file()]
         else:
-            # Backward-compatible fallback for installations that predate current_run.json.
             files = sorted(self.output_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
 
         if not files:
             empty = QLabel("Nenhum clip da última geração.\nGere uma nova análise e os clips aparecerão aqui automaticamente.")
             empty.setObjectName("muted")
-            empty.setAlignment(app_main.Qt.AlignCenter)
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.video_grid.addWidget(empty, 0, 0)
             return
 
