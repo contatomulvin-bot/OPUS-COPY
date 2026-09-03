@@ -17,10 +17,16 @@ import apple_ui  # noqa: E402
 
 
 def _metadata_for(filename: str) -> dict | None:
-    path = ROOT / "workspace" / "analysis" / "clip_metadata.json"
+    analysis_dir = ROOT / "workspace" / "analysis"
     try:
-        items = json.loads(path.read_text(encoding="utf-8"))
-        return next((item for item in items if item.get("output") == filename), None)
+        current_run = json.loads((analysis_dir / "current_run.json").read_text(encoding="utf-8"))
+        if current_run.get("status") != "completed":
+            return None
+        metadata_name = current_run.get("metadata")
+        if not metadata_name:
+            return None
+        items = json.loads((analysis_dir / str(metadata_name)).read_text(encoding="utf-8"))
+        return next((item for item in items if item.get("output") == filename and item.get("run_id") == current_run.get("run_id")), None)
     except (OSError, ValueError, TypeError):
         return None
 
@@ -202,7 +208,7 @@ class ResponsiveMainWindow(app_main.MainWindow):
         self._apply_responsive_layout()
 
     def refresh_videos(self) -> None:
-        """Refresh only the outputs belonging to the latest completed generation."""
+        """Show only outputs explicitly recorded by the latest completed generation."""
         if not hasattr(self, "video_grid"):
             return
 
@@ -215,26 +221,36 @@ class ResponsiveMainWindow(app_main.MainWindow):
 
         manifest_path = ROOT / "workspace" / "analysis" / "current_run.json"
         current_outputs: list[str] = []
+        manifest_status = "missing"
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if manifest.get("status") == "completed":
+            manifest_status = str(manifest.get("status", "missing"))
+            if manifest_status == "completed":
                 current_outputs = [str(name) for name in manifest.get("outputs", []) if name]
         except (OSError, ValueError, TypeError):
-            current_outputs = []
+            pass
 
-        if current_outputs:
-            files = [self.output_dir / name for name in current_outputs if (self.output_dir / name).is_file()]
-        else:
-            files = sorted(self.output_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
-
-        if not files:
-            empty = QLabel("Nenhum clip da última geração.\nGere uma nova análise e os clips aparecerão aqui automaticamente.")
+        # Never fall back to all MP4s: that is what caused clips from previous videos
+        # to appear when the current generation was still running or failed.
+        if manifest_status != "completed" or not current_outputs:
+            empty = QLabel(
+                "Nenhum clip da última geração.\n"
+                "Gere uma nova análise e os clips aparecerão aqui automaticamente."
+            )
             empty.setObjectName("muted")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.video_grid.addWidget(empty, 0, 0)
             return
 
-        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        files = [self.output_dir / name for name in current_outputs if (self.output_dir / name).is_file()]
+        if not files:
+            empty = QLabel("A última geração foi concluída, mas nenhum arquivo de clip está disponível.")
+            empty.setObjectName("muted")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.video_grid.addWidget(empty, 0, 0)
+            return
+
+        files.sort(key=lambda p: current_outputs.index(p.name))
         columns = 2 if len(files) > 1 else 1
         for index, path in enumerate(files):
             card = AnalyticsVideoCard(path)
