@@ -31,6 +31,11 @@ class Pipeline:
             return None
 
     @staticmethod
+    def _video_cache_key(url: str, language: str) -> str:
+        raw = f"{url.strip()}|{language.strip().lower()}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+    @staticmethod
     def _clip_cache_key(url: str, clip, language: str) -> str:
         raw = f"{url.strip()}|{language}|{float(clip.start):.3f}|{float(clip.end):.3f}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
@@ -45,6 +50,9 @@ class Pipeline:
         self.workspace.mkdir(parents=True, exist_ok=True)
         if free_space_gb(self.workspace) < 2:
             raise ToolError("Pouco espaço livre. Libere pelo menos 2 GB antes de processar um vídeo.")
+        url = url.strip()
+        if not url:
+            raise ToolError("Informe uma URL do YouTube.")
         language = (language or "pt").strip().lower()
         if language not in {"pt", "en", "es", "fr", "de", "it", "ja", "ko", "zh", "ru"}:
             raise ToolError(f"Idioma de transcrição não suportado: {language}")
@@ -63,13 +71,13 @@ class Pipeline:
         final_dir = Path(output_dir) if output_dir else self.workspace / "clips"
         final_dir.mkdir(parents=True, exist_ok=True)
 
-        # The Videos tab must represent one generation, not every old MP4 in the folder.
+        # Every generation has an immutable id. The Videos tab uses this manifest as its source of truth.
         run_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         current_run_path = analysis_dir / "current_run.json"
         self._write_json(current_run_path, {
             "run_id": run_id,
             "status": "running",
-            "url": url.strip(),
+            "url": url,
             "language": language,
             "requested_clips": max_clips,
             "outputs": [],
@@ -77,9 +85,11 @@ class Pipeline:
         })
 
         try:
-            transcript_path = analysis_dir / f"transcript_{language}_faster_whisper_v2.json"
+            # A transcript cache must be unique to the source video and language.
+            video_key = self._video_cache_key(url, language)
+            transcript_path = analysis_dir / f"transcript_{language}_{video_key}.json"
             report("Baixando somente o áudio para análise…", 3)
-            audio = downloader.download_audio(url, analysis_dir, analysis_dir / "analysis_audio.%(ext)s")
+            audio = downloader.download_audio(url, analysis_dir, analysis_dir / f"analysis_audio_{video_key}.%(ext)s")
             report("Áudio pronto. Verificando transcrição em cache…", 15)
             transcript = self._load_cached_transcript(transcript_path)
             if transcript is None:
@@ -95,7 +105,7 @@ class Pipeline:
             if not clips:
                 raise ToolError("A IA não encontrou clips válidos na transcrição.")
 
-            metadata_path = analysis_dir / "clip_metadata.json"
+            metadata_path = analysis_dir / f"clip_metadata_{run_id}.json"
             metadata = [{
                 "run_id": run_id,
                 "rank": index,
@@ -114,7 +124,7 @@ class Pipeline:
             report("Melhores oportunidades: " + " · ".join(f"{c.score:.0f}/100" + (f" · {', '.join(c.keywords[:3])}" if c.keywords else "") for c in clips), 60)
 
             report("Baixando somente os trechos selecionados…", 61)
-            sections_dir = self.workspace / "selected_clips"
+            sections_dir = self.workspace / "selected_clips" / run_id
             sections_dir.mkdir(parents=True, exist_ok=True)
             download_workers = max(1, min(int(os.getenv("OPUS_COPY_DOWNLOAD_WORKERS", "2")), len(clips)))
             section_paths: list[tuple[int, object, Path]] = []
@@ -158,21 +168,22 @@ class Pipeline:
             self._write_json(current_run_path, {
                 "run_id": run_id,
                 "status": "completed",
-                "url": url.strip(),
+                "url": url,
                 "language": language,
                 "requested_clips": max_clips,
                 "actual_clips": len(output_names),
                 "outputs": output_names,
+                "metadata": metadata_path.name,
                 "started_at": None,
                 "completed_at": time.time(),
             })
-            report(f"Concluído · {len(outputs)} clip(s) gerado(s).", 100)
+            report(f"Concluído · {len(output_names)} clip(s) gerado(s).", 100)
             return outputs
         except Exception as exc:
             self._write_json(current_run_path, {
                 "run_id": run_id,
                 "status": "failed",
-                "url": url.strip(),
+                "url": url,
                 "language": language,
                 "requested_clips": max_clips,
                 "outputs": [],
