@@ -70,6 +70,8 @@ jobs:
           $runtime = (Resolve-Path desktop\dist\OPUS-COPY\runtime).Path
           & (Join-Path $runtime 'yt-dlp.exe') --version
           if ($LASTEXITCODE -ne 0) { throw 'O yt-dlp empacotado falhou.' }
+          & (Join-Path $runtime 'node.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'O Node.js empacotado falhou.' }
           & (Join-Path $runtime 'ffmpeg.exe') -version
           if ($LASTEXITCODE -ne 0) { throw 'O FFmpeg empacotado falhou.' }
           & (Join-Path $runtime 'ffprobe.exe') -version

@@ -40,6 +40,18 @@ if (-not (Test-Path $ytDlpPath)) {
 if ($LASTEXITCODE -ne 0) { throw 'O yt-dlp independente incluído no build não executou corretamente.' }
 Write-Host 'Runtime incluído: yt-dlp.exe' -ForegroundColor Green
 
+# Bundle Node as well, so yt-dlp can solve YouTube JavaScript challenges even
+# when the destination computer does not have Node installed globally.
+$nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+if (-not $nodeCommand) {
+  throw 'Node.js não foi encontrado. Execute .\desktop\setup.ps1 antes do build.'
+}
+$nodePath = Join-Path $runtimeDir 'node.exe'
+Copy-Item $nodeCommand.Source $nodePath -Force
+& $nodePath --version
+if ($LASTEXITCODE -ne 0) { throw 'O Node.js incluído no build não executou corretamente.' }
+Write-Host 'Runtime incluído: node.exe' -ForegroundColor Green
+
 # FFmpeg and FFprobe are native standalone binaries on Windows.  Use the
 # installed copies when possible; otherwise download the release essentials
 # build linked by the official FFmpeg download page.
@@ -87,7 +99,7 @@ if (Test-Path $runtimeDir) {
   Copy-Item (Join-Path $runtimeDir '*') (Join-Path $distDir 'runtime') -Force -ErrorAction SilentlyContinue
 }
 
-foreach ($name in @('yt-dlp.exe', 'ffmpeg.exe', 'ffprobe.exe')) {
+foreach ($name in @('yt-dlp.exe', 'node.exe', 'ffmpeg.exe', 'ffprobe.exe')) {
   $packagedTool = Join-Path (Join-Path $distDir 'runtime') $name
   if (-not (Test-Path $packagedTool)) {
     throw "Ferramenta obrigatória ausente do pacote: $name"
@@ -97,4 +109,4 @@ foreach ($name in @('yt-dlp.exe', 'ffmpeg.exe', 'ffprobe.exe')) {
 Write-Host ''
 Write-Host 'BUILD CONCLUÍDO.' -ForegroundColor Green
 Write-Host "Executável: $distDir\OPUS-COPY.exe" -ForegroundColor Green
-Write-Host 'Observação: o Node.js continua sendo uma dependência externa para os desafios JavaScript do YouTube.' -ForegroundColor Yellow
+Write-Host 'yt-dlp, Node.js, FFmpeg e FFprobe foram incluídos no pacote.' -ForegroundColor Green
