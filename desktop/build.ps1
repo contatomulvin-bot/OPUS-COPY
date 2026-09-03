@@ -40,14 +40,38 @@ if (-not (Test-Path $ytDlpPath)) {
 if ($LASTEXITCODE -ne 0) { throw 'O yt-dlp independente incluído no build não executou corretamente.' }
 Write-Host 'Runtime incluído: yt-dlp.exe' -ForegroundColor Green
 
-# FFmpeg and FFprobe are native standalone binaries on Windows.
+# FFmpeg and FFprobe are native standalone binaries on Windows.  Use the
+# installed copies when possible; otherwise download the release essentials
+# build linked by the official FFmpeg download page.
+$missingFfmpegTools = @()
 foreach ($name in @('ffmpeg.exe', 'ffprobe.exe')) {
   $command = Get-Command ($name -replace '\.exe$','') -ErrorAction SilentlyContinue
   if ($command) {
     Copy-Item $command.Source (Join-Path $runtimeDir $name) -Force
     Write-Host "Runtime incluído: $name" -ForegroundColor Green
   } else {
-    Write-Warning "$name não encontrado no PATH; o EXE continuará esperando o programa no PATH."
+    $missingFfmpegTools += $name
+  }
+}
+
+if ($missingFfmpegTools.Count -gt 0) {
+  $ffmpegUrl = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
+  $ffmpegTemp = Join-Path ([System.IO.Path]::GetTempPath()) ("opus-copy-ffmpeg-" + [guid]::NewGuid().ToString('N'))
+  $ffmpegZip = Join-Path $ffmpegTemp 'ffmpeg.zip'
+  $ffmpegExtract = Join-Path $ffmpegTemp 'extracted'
+  try {
+    New-Item -ItemType Directory -Force -Path $ffmpegExtract | Out-Null
+    Write-Host 'Baixando FFmpeg/FFprobe para o pacote Windows...' -ForegroundColor Yellow
+    Invoke-WebRequest -Uri $ffmpegUrl -OutFile $ffmpegZip -UseBasicParsing
+    Expand-Archive -Path $ffmpegZip -DestinationPath $ffmpegExtract -Force
+    foreach ($name in $missingFfmpegTools) {
+      $candidate = Get-ChildItem -Path $ffmpegExtract -Filter $name -Recurse -File | Select-Object -First 1
+      if (-not $candidate) { throw "O arquivo $name não foi encontrado no pacote baixado do FFmpeg." }
+      Copy-Item $candidate.FullName (Join-Path $runtimeDir $name) -Force
+      Write-Host "Runtime incluído: $name" -ForegroundColor Green
+    }
+  } finally {
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $ffmpegTemp
   }
 }
 
