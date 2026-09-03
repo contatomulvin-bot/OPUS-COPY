@@ -20,7 +20,7 @@ for package in ("torch", "torchaudio", "faster_whisper", "ctranslate2", "google.
         pass
 
 analysis = Analysis(
-    [str(ROOT / "main.py")],
+    [str(ROOT / "responsive_launcher.py")],
     pathex=[str(ROOT), str(ROOT_PARENT)],
     binaries=binaries,
     datas=datas,
