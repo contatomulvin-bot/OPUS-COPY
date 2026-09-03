@@ -56,6 +56,7 @@ jobs:
         shell: pwsh
         run: |
           $python = (Resolve-Path desktop\.venv\Scripts\python.exe).Path
+          $env:Path = "$(Split-Path $python);$env:Path"
           $env:PYTHONPATH = (Resolve-Path desktop).Path
           & $python -c "from opus_copy.downloader import YouTubeDownloader; d=YouTubeDownloader(); a=d._base_args(); assert '--no-plugin-dirs' in a; assert 'bgutil' not in ' '.join(a).lower(); print('yt-dlp isolado de plugins externos:', ' '.join(a))"
 
