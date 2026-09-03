@@ -88,8 +88,11 @@ class Pipeline:
             # A transcript cache must be unique to the source video and language.
             video_key = self._video_cache_key(url, language)
             transcript_path = analysis_dir / f"transcript_{language}_{video_key}.json"
+            audio_dir = analysis_dir / "audio_cache" / video_key
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            audio_pattern = audio_dir / f"analysis_audio_{video_key}.%(ext)s"
             report("Baixando somente o áudio para análise…", 3)
-            audio = downloader.download_audio(url, analysis_dir, analysis_dir / f"analysis_audio_{video_key}.%(ext)s")
+            audio = downloader.download_audio(url, audio_dir, audio_pattern)
             report("Áudio pronto. Verificando transcrição em cache…", 15)
             transcript = self._load_cached_transcript(transcript_path)
             if transcript is None:
