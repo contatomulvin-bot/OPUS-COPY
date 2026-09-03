@@ -1,453 +1,323 @@
-<img width="1240" height="888" alt="image" src="https://github.com/user-attachments/assets/f8de1e86-0bf0-42fe-b534-183360bce287" />
-
 # OPUS-COPY
 
-> **AI-powered desktop video clipper for Windows**
+> **AI-powered desktop/local video clipper for Windows**
 
-Transforme vídeos longos em clips verticais prontos para publicação — com **transcrição local rápida, seleção inteligente, ganchos e palavras-chave pensados para audiência no YouTube**.
+Transforme vídeos longos em Shorts, Reels e TikToks com uma pipeline local de ingestão, transcrição, análise semântica, seleção de momentos, reenquadramento, legendas e renderização.
 
-O **OPUS-COPY** é um aplicativo desktop desenvolvido para encontrar automaticamente os melhores momentos de vídeos longos usando IA, gerar cortes, adicionar legendas e preparar conteúdo em formato vertical 9:16.
+## O que foi implementado
 
----
+### 🎥 Entrada e ingestão
 
-## ✨ Recursos
+- Upload de vídeo local.
+- URL do YouTube via `yt-dlp`.
+- Armazenamento local com IDs independentes por vídeo.
+- Extração de áudio com FFmpeg.
+- Leitura de duração, resolução e metadados com FFprobe.
+- Limite de upload configurado no servidor.
+- Tratamento de erros de download, áudio e mídia.
 
-* 🎥 Download de vídeos do YouTube
-* 🤖 Análise automática dos melhores momentos com IA
-* ⚡ Transcrição local com **faster-whisper**
-* 🧠 Timestamps por palavra sem uma segunda etapa de alinhamento WhisperX
-* 🌎 Seleção do idioma de transcrição
-* ✂️ Geração automática de clips
-* 🎯 Ranking por potencial de retenção e força do gancho
-* 🪝 Geração de **hooks/ganchos** para aumentar o interesse inicial
-* 🔎 Geração de **palavras-chave relacionadas ao YouTube**
-* 📊 Score detalhado de cada oportunidade
-* 📱 Conversão para formato vertical 9:16
-* 📝 Legendas automáticas
-* 🎬 Processamento com FFmpeg
-* ⚡ Processamento em segundo plano sem travar a interface
-* 💾 Cache de transcrições para evitar processamento repetido
-* 🚀 Download e renderização de clips em paralelo
-* 🧹 Gerenciamento de arquivos temporários
-* 📋 Diagnóstico detalhado de erros
-* 🧩 Suporte a PO Token Provider para o ecossistema atual do YouTube
-* 🖥️ Preparação para distribuição como aplicativo Windows `.exe`
+### 🧠 Seleção inteligente
 
----
+A análise usa Gemini para encontrar momentos que possam funcionar como conteúdo curto independente. O pipeline valida os timestamps contra a transcrição real antes de salvar o clip.
 
-## 🧠 Como funciona
+O ranking considera:
+
+| Critério | Função |
+| --- | --- |
+| Hook | força dos primeiros segundos |
+| Clarity | compreensão imediata |
+| Emotion | emoção, humor e identificação |
+| Curiosity | vontade de continuar assistindo |
+| Standalone context | independência do contexto externo |
+| Value | informação, utilidade ou entretenimento |
+
+O score final é calculado deterministicamente pelo OPUS-COPY, evitando que a IA simplesmente invente uma nota.
+
+### 🎯 Perfis de conteúdo
+
+O motor de score possui presets:
+
+- `viral`
+- `education`
+- `storytelling`
+- `humor`
+- `marketing`
+- `podcast`
+
+Configure com:
+
+```env
+OPUS_CONTENT_PROFILE="viral"
+```
+
+O perfil altera os pesos sem quebrar o formato de dados já existente.
+
+### 🛡️ Quality Gate
+
+Antes de um candidato entrar no ranking final, o OPUS-COPY verifica se hook, clareza e contexto independente atingem um nível mínimo. Isso reduz clips que parecem bons numericamente, mas começam sem contexto ou terminam sem payoff.
+
+### ✂️ Anti-alucinação e qualidade temporal
+
+- Timestamps são ancorados em segmentos reais da transcrição.
+- Clips com texto insuficiente são descartados.
+- Início e fim são ajustados para respeitar palavras/segmentos reais.
+- Clips semelhantes são deduplicados.
+- O resultado final é limitado pela quantidade solicitada.
+
+### 📝 Transcrição
+
+- `faster-whisper` para o caminho local rápido.
+- Timestamps por palavra.
+- Cache por vídeo/transcrição no banco.
+- Seleção explícita de idioma.
+- WhisperX permanece disponível como opção especializada.
+
+### 📱 Vídeo vertical
+
+- Reframe 9:16.
+- Processamento com FFmpeg.
+- H.264 + AAC.
+- Geração de legendas automáticas.
+- Preview do trecho na interface atual.
+
+### 🎨 Editor e projeto
+
+A interface web/desktop atual já possui fluxo de projeto, seleção de clips, transcript viewer, edição de clip, preview e renderização. O projeto mantém serviços separados para ingestão, transcrição, análise, storage, jobs e render.
+
+### ⚡ Renderização e fila
+
+- Render assíncrono.
+- Status `QUEUED`, `PROCESSING`, `COMPLETED` e `FAILED`.
+- Progresso persistido no banco.
+- Polling da interface para acompanhar trabalhos.
+- Renderização individual e suporte à evolução para lote.
+
+## Correção importante: vídeo antigo sendo reutilizado
+
+O projeto tinha um ponto de fragilidade: a relação `project -> videos` não tinha uma ordem determinística. Ao adicionar uma nova URL ao mesmo projeto, `videos[0]` podia representar um vídeo antigo.
+
+Agora `ProjectService` sempre retorna os vídeos por `createdAt desc`. Assim:
 
 ```text
-YouTube URL
-     │
-     ▼
-┌──────────────┐
-│    yt-dlp    │
-│    Download  │
-└──────┬───────┘
-       │
-       ▼
-┌──────────────────┐
-│  faster-whisper  │
-│ Transcrição local│
-│ + word timestamps│
-└──────┬───────────┘
-       │
-       ▼
-┌─────────────────────┐
-│         IA          │
-│ Hook + Retenção     │
-│ Curiosidade + Valor │
-│ Keywords YouTube    │
-└─────────┬───────────┘
-          │
-          ▼
-┌──────────────┐
-│ Clip Selection│
-│ Score / Rank  │
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│    FFmpeg    │
-│ Reframe 9:16 │
-│ + Legendas   │
-└──────┬───────┘
-       │
-       ▼
-  MP4 9:16
-  + Legendas
-  + Metadados
+Projeto
+ ├── vídeo novo   ← primaryVideo
+ ├── vídeo antigo
+ └── vídeo antigo
 ```
 
----
+Isso impede que a interface escolha aleatoriamente um vídeo anterior quando uma nova fonte é adicionada.
 
-## 🎯 Seleção orientada para audiência
-
-O OPUS-COPY não procura apenas trechos interessantes. A IA avalia cada oportunidade pensando em **retenção e descoberta no YouTube**.
-
-### ⚡ Critérios de ranking
-
-| Critério | Peso |
-| --- | ---: |
-| 🪝 Força do gancho nos primeiros 3–5s | **30%** |
-| 📈 Potencial de retenção | **20%** |
-| 🤯 Curiosidade / surpresa | **15%** |
-| ❤️ Emoção / identificação | **10%** |
-| 💎 Valor / entretenimento | **10%** |
-| 🔄 Potencial de compartilhamento | **10%** |
-| 🎯 Clareza e contexto independente | **5%** |
-
-### 🪝 Ganchos
-
-A IA procura estruturas que naturalmente despertam interesse, como:
-
-* perguntas fortes;
-* revelações;
-* contradições;
-* opiniões fortes;
-* histórias incomuns;
-* erros e consequências;
-* descobertas;
-* números relevantes;
-* segredos ou informações inesperadas;
-* promessas e conflitos.
-
-O sistema **não deve inventar fatos** nem transformar um trecho em clickbait enganoso. O gancho precisa representar o conteúdo real do clip.
-
-### 🔎 Palavras-chave para YouTube
-
-Cada clip pode receber de **3 a 8 palavras-chave/frases relacionadas ao assunto**, priorizando termos que façam sentido para descoberta e pesquisa no YouTube.
-
-Exemplo conceitual:
+## Arquitetura
 
 ```text
-Título: O erro que quase todo iniciante comete
-
-Hook: "Esse erro parece pequeno, mas pode acabar com seu resultado."
-
-Keywords:
-- erros de iniciantes
-- dicas para iniciantes
-- como começar
-- erros comuns
-- tutorial
+                 OPUS-COPY
+                     │
+             ┌───────┴────────┐
+             │     Entrada    │
+             └───────┬────────┘
+                     │
+          Upload / YouTube URL
+                     │
+                     ▼
+              Video Ingestion
+                     │
+          ┌──────────┴──────────┐
+          │                     │
+       FFprobe               FFmpeg
+          │                     │
+      metadata                audio
+          │                     │
+          └──────────┬──────────┘
+                     ▼
+              Transcription
+                     │
+          faster-whisper / WhisperX
+                     │
+                     ▼
+              Gemini Analysis
+                     │
+        Hook / Context / Emotion
+        Curiosity / Clarity / Value
+                     │
+                     ▼
+               Quality Gate
+                     │
+                     ▼
+             Score + Deduplication
+                     │
+                     ▼
+               Clip Selection
+                     │
+          ┌──────────┴──────────┐
+          │                     │
+       Reframe              Subtitles
+          │                     │
+          └──────────┬──────────┘
+                     ▼
+                  FFmpeg
+                     │
+                     ▼
+                 MP4 9:16
 ```
 
-As palavras-chave são geradas a partir do conteúdo real da transcrição e não devem ser adicionadas apenas para parecerem virais.
-
----
-
-## ⚡ Transcrição rápida
-
-O pipeline local utiliza **faster-whisper** em vez de executar o fluxo completo do WhisperX.
-
-Isso evita uma segunda etapa pesada de alinhamento quando os timestamps por palavra já são suficientes para o sistema de legendas.
-
-O modelo é carregado e reutilizado durante a execução, e as transcrições podem ser armazenadas em cache para evitar processamento desnecessário.
-
-### Dispositivo
-
-O backend detecta automaticamente o dispositivo compatível com o runtime instalado:
-
-```env
-WHISPER_DEVICE=auto
-WHISPER_MODEL=small
-WHISPER_COMPUTE_TYPE=int8
-```
-
-Também é possível configurar explicitamente:
-
-```env
-WHISPER_DEVICE=cpu
-```
-
-ou, em ambientes com suporte CUDA compatível:
-
-```env
-WHISPER_DEVICE=cuda
-WHISPER_COMPUTE_TYPE=float16
-```
-
-> **Nota:** CUDA é destinado a GPUs NVIDIA. Em Windows com GPUs AMD, o projeto utiliza um fallback compatível em vez de assumir que CUDA estará disponível.
-
----
-
-## 🛠️ Tecnologias
+## Stack
 
 | Tecnologia | Função |
-| ---------- | ------- |
-| Python | Backend e pipeline |
-| PySide6 | Interface desktop |
-| yt-dlp | Download de vídeos |
-| faster-whisper | Transcrição local |
-| Gemini | Análise de clips e audiência |
-| FFmpeg | Edição e renderização |
-| SQLite | Persistência local |
-| PowerShell | Setup e execução no Windows |
-| PyInstaller | Empacotamento Windows |
+| --- | --- |
+| React + Vite | Interface web |
+| TypeScript | Serviços e API |
+| Express | Backend local |
+| Prisma + SQLite | Persistência |
+| Python + PySide6 | Pipeline desktop Windows |
+| yt-dlp | Download YouTube |
+| FFmpeg / FFprobe | Mídia e renderização |
+| faster-whisper | Transcrição rápida |
+| WhisperX | Transcrição/alinhamento especializado |
+| Gemini | Seleção semântica |
+| Zod | Validação |
+| Vitest | Testes |
+| PyInstaller | Empacotamento `.exe` |
 
----
+## Estrutura principal
 
-## 💻 Requisitos
-
-### Sistema
-
-* Windows 10 ou Windows 11
-* Python 3.11 x64
-* Git
-* Internet
-* Espaço em disco suficiente para vídeos e processamento
-
-### Dependências principais
-
-* Python 3.11
-* PySide6
-* yt-dlp
-* faster-whisper
-* FFmpeg
-* ffprobe
-* Google Gemini SDK
-* PO Token Provider
-* PyInstaller
-
----
-
-# 🚀 Instalação
-
-Clone o repositório:
-
-```powershell
-git clone https://github.com/contatomulvin-bot/OPUS-COPY.git
-cd OPUS-COPY
+```text
+OPUS-COPY/
+├── src/                         # interface React
+├── lib/
+│   ├── ai/                      # prompts e providers de IA
+│   ├── clips/                   # análise, score, deduplicação
+│   ├── jobs/                    # fila local
+│   ├── services/                # ingestão, projeto, transcript, render
+│   ├── storage/                 # storage local
+│   ├── transcription/           # providers de transcrição
+│   ├── validation/              # schemas
+│   └── video/                   # providers, reframe e subtitles
+├── desktop/                     # aplicativo Python/Windows
+├── scripts/                     # setup WhisperX
+├── prisma/                      # schema e banco local
+├── server.ts                    # API Express
+└── tests/                       # testes automatizados
 ```
 
-Execute o setup:
+## Instalação
+
+### Node / aplicação web
 
 ```powershell
-.\desktop\setup.ps1
+npm install
+npm run prisma:generate
+npm run prisma:push
+npm run dev
 ```
 
-O script cria o ambiente virtual e instala as dependências necessárias.
+### Configuração
 
-Depois inicie o aplicativo:
-
-```powershell
-.\desktop\run.ps1
-```
-
----
-
-# 🔑 Configuração da IA
-
-Crie um arquivo `.env` na raiz do projeto:
+Copie `.env.example` para `.env` e configure:
 
 ```env
-GEMINI_API_KEY=SEU_TOKEN_AQUI
-```
-
-Opcionalmente, para configurar a transcrição:
-
-```env
-WHISPER_DEVICE=auto
-WHISPER_MODEL=small
-WHISPER_COMPUTE_TYPE=int8
+DATABASE_URL="file:./dev.db"
+GEMINI_API_KEY="SUA_CHAVE"
+APP_URL="http://localhost:3000"
+OPUS_CONTENT_PROFILE="viral"
+WHISPER_DEVICE="auto"
+WHISPER_MODEL="small"
+WHISPER_COMPUTE_TYPE="int8"
 ```
 
 Nunca publique sua API key no GitHub.
 
----
+### Desktop Windows
 
-# 📁 Metadados gerados
+```powershell
+.\desktop\setup.ps1
+.\desktop\run.ps1
+```
 
-Durante o processamento, o OPUS-COPY pode gerar:
+O setup prepara o ambiente Python, faster-whisper, yt-dlp, EJS e o PO Token Provider usado pelo fluxo de download do YouTube.
+
+## AMD / RX 7600
+
+O OPUS-COPY não assume que uma GPU AMD deve ser tratada como CUDA.
+
+Para Windows, a disponibilidade de aceleração depende do backend instalado. O caminho de transcrição deve ter fallback para CPU quando GPU não estiver disponível.
+
+A RX 7600 é uma GPU RDNA3 `gfx1102`. Existem builds comunitárias de `whisper.cpp` com aceleração AMD/ROCm para RX 7600, enquanto o suporte oficial de ROCm no Windows deve ser verificado contra a versão do HIP SDK instalada antes de habilitar um backend específico.
+
+Para uma instalação que não tenha aceleração AMD funcional, o aplicativo continua podendo usar CPU.
+
+## Testes
+
+```powershell
+npm run lint
+npm run test
+npm run build
+```
+
+Os testes automatizados cobrem especialmente o ranking determinístico e o quality gate. Testes de download, FFmpeg, GPU e APIs externas dependem do ambiente real.
+
+## Roadmap
+
+### Concluído / núcleo
+
+- [x] Upload local
+- [x] YouTube
+- [x] Ingestão por vídeo independente
+- [x] Extração de áudio
+- [x] FFprobe
+- [x] Transcrição local
+- [x] Timestamps por palavra
+- [x] Seleção semântica com IA
+- [x] Ranking determinístico
+- [x] Quality gate
+- [x] Deduplicação
+- [x] Ajuste de timestamps
+- [x] 9:16
+- [x] Legendas
+- [x] Preview
+- [x] Render assíncrono
+- [x] Correção da seleção do vídeo mais recente
+
+### Próxima camada
+
+- [ ] Reenquadramento com tracking de rosto/sujeito em vez de somente crop heurístico
+- [ ] HotPeak temporal multimodal
+- [ ] Análise de frames para pessoas, gameplay e telas
+- [ ] Edição em massa de legendas/reframe/Brand Kit
+- [ ] Templates de legendas
+- [ ] Brand Kit persistente
+- [ ] Renderização em lote com progresso global
+- [ ] Dashboard de jobs
+- [ ] Presets TikTok / Reels / Shorts na UI
+- [ ] Empacotamento `.exe` final totalmente automatizado
+- [ ] Publicação/agendamento em redes sociais
+- [ ] Monitoramento de lives
+
+## Filosofia
+
+O objetivo não é apenas cortar vídeo. É transformar:
 
 ```text
-analysis/
-├── transcript_pt_faster_whisper_v2.json
-└── clip_metadata.json
+1 vídeo longo
+      ↓
+transcrição
+      ↓
+análise semântica
+      ↓
+melhores momentos
+      ↓
+clips independentes
+      ↓
+9:16 + legenda
+      ↓
+conteúdo pronto para publicação
 ```
 
-O `clip_metadata.json` guarda informações como:
+Nenhum recurso é considerado realmente pronto apenas porque o código compila. Download, transcrição, IA, FFmpeg e GPU precisam ser validados no ambiente em que o usuário executará o aplicativo.
 
-```json
-{
-  "rank": 1,
-  "score": 94,
-  "title": "Título sugerido",
-  "hook": "Gancho do clip",
-  "category": "EDUCATION",
-  "keywords": [
-    "palavra-chave 1",
-    "palavra-chave 2"
-  ],
-  "scores": {
-    "hook": 96,
-    "retention": 93,
-    "curiosity": 90
-  }
-}
-```
-
-Isso permite que a interface futuramente mostre não apenas o vídeo selecionado, mas **por que a IA escolheu aquele momento**.
-
----
-
-# 📱 Saída
-
-Os clips são preparados para conteúdo vertical:
-
-```text
-Formato: MP4
-Aspect ratio: 9:16
-Vídeo: H.264
-Áudio: AAC
-Legendas: automáticas
-```
-
-A ideia é gerar vídeos compatíveis com:
-
-* TikTok
-* Instagram Reels
-* YouTube Shorts
-
----
-
-# 🛡️ YouTube
-
-O download utiliza `yt-dlp`.
-
-O YouTube pode aplicar mecanismos de:
-
-* autenticação;
-* CAPTCHA;
-* bloqueio por IP;
-* restrições de cliente;
-* cookies;
-* PO Tokens.
-
-O projeto tenta lidar com esses cenários de forma automatizada sempre que possível.
-
-O OPUS-COPY não solicita que o usuário envie arquivos de cookies para o projeto.
-
----
-
-# 🧪 Testes
-
-O projeto deve diferenciar claramente:
-
-### Testes executados
-
-* Importação dos módulos
-* Dependências
-* yt-dlp
-* FFmpeg
-* ffprobe
-* faster-whisper
-* Renderização
-* Pipeline
-
-### Testes dependentes do ambiente
-
-Alguns testes dependem do Windows, GPU, navegador, rede, conta do YouTube ou disponibilidade das APIs.
-
-Esses testes não devem ser considerados aprovados sem execução real.
-
----
-
-# ⚠️ Status do projeto
-
-**Em desenvolvimento ativo.**
-
-O objetivo atual é tornar todo o pipeline confiável para uso real:
-
-```text
-Download
-   ↓
-Transcrição local
-   ↓
-Análise IA
-   ↓
-Hook + Keywords
-   ↓
-Seleção
-   ↓
-Corte
-   ↓
-Reframe 9:16
-   ↓
-Legendas
-   ↓
-MP4 final
-```
-
----
-
-# 🧭 Roadmap
-
-## v0.1
-
-* [x] Aplicação desktop
-* [x] Interface PySide6
-* [x] Download com yt-dlp
-* [x] Pipeline de transcrição
-* [x] Transcrição local com faster-whisper
-* [x] Timestamps por palavra
-* [x] Análise de clips
-* [x] Ranking de potencial de retenção
-* [x] Geração de hooks
-* [x] Geração de palavras-chave para YouTube
-* [x] Renderização FFmpeg
-* [x] Tratamento de erros
-
-## v0.2
-
-* [ ] Melhorar seleção viral
-* [ ] Melhorar reframe automático
-* [ ] Mais estilos de legenda
-* [ ] Preview dos clips
-* [ ] Histórico de projetos
-* [ ] Barra de progresso com ETA mais precisa
-* [ ] Melhor tratamento de YouTube
-* [ ] Interface com estética mais refinada
-
-## v0.3
-
-* [ ] Exportação em lote
-* [ ] Templates de legendas
-* [ ] Detecção de rosto
-* [ ] Tracking de sujeito
-* [ ] Presets para TikTok / Reels / Shorts
-* [ ] Empacotamento `.exe` final
-* [ ] Download/gerenciamento automático de modelos
-* [ ] Otimizações específicas para GPUs AMD
-
----
-
-# 🎨 Identidade
-
-O OPUS-COPY utiliza uma identidade visual escura e minimalista, com uma marca baseada em um **M formado por fumaça**, representando criatividade, mídia e transformação de conteúdo.
-
----
-
-# 📌 Filosofia do projeto
-
-O objetivo do OPUS-COPY é transformar:
-
-> **1 vídeo longo → vários clips relevantes → hooks fortes → conteúdo pronto para publicação**
-
-A prioridade do projeto é **qualidade, retenção e confiabilidade**, não apenas automação.
-
-Nenhum recurso deve ser considerado concluído apenas porque o código foi escrito. Sempre que possível, ele precisa ser validado por um teste real.
-
----
-
-# 📄 Licença
+## Licença
 
 Este projeto ainda não possui uma licença pública definida.
 
 ---
 
-## OPUS-COPY
-
-**Turn long videos into clips worth watching.**
+**OPUS-COPY — Turn long videos into clips worth watching.**
