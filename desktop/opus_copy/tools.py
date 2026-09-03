@@ -16,13 +16,20 @@ def _bundle_dir() -> Path:
     return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
 
 
+def _runtime_dirs() -> tuple[Path, ...]:
+    """Locations used by source runs and one-directory PyInstaller builds."""
+    bundle = _bundle_dir()
+    executable_dir = Path(sys.executable).resolve().parent
+    return bundle / "runtime", executable_dir / "runtime", bundle
+
+
 def find_executable(name: str) -> str | None:
     # Prefer binaries shipped with the packaged application.
     local_names = [name]
     if os.name == "nt" and not name.lower().endswith(".exe"):
         local_names.append(f"{name}.exe")
     for candidate in local_names:
-        for folder in (_bundle_dir() / "runtime", _bundle_dir()):
+        for folder in _runtime_dirs():
             path = folder / candidate
             if path.is_file():
                 return str(path)
@@ -41,8 +48,7 @@ def run_process(args: list[str], *, cwd: Path | None = None, timeout: int | None
         args,
         cwd=str(cwd) if cwd else None,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         encoding="utf-8",
         errors="replace",
         timeout=timeout,

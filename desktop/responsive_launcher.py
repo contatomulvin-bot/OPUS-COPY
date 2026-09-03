@@ -5,15 +5,26 @@ import shutil
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QBoxLayout, QTimer, Qt
-from PySide6.QtWidgets import QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (
+    QBoxLayout,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QVBoxLayout,
+)
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import main as app_main  # noqa: E402
 import apple_ui  # noqa: E402
+import main as app_main  # noqa: E402
 
 
 def _metadata_for(filename: str) -> dict | None:

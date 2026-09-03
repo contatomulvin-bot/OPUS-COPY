@@ -7,21 +7,43 @@ import traceback
 from pathlib import Path
 
 from dotenv import load_dotenv
-from PySide6.QtCore import QObject, QThread, Qt, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen
-from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QColorDialog, QComboBox, QFileDialog, QFrame,
-    QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
-    QTabWidget, QVBoxLayout, QWidget,
-)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QColorDialog,
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSpinBox,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT.parent / ".env")
 
+from opus_copy.app_config import (  # noqa: E402
+    APP_NAME,
+    configure_windows_app_id,
+    icon_path,
+)
 from opus_copy.pipeline import Pipeline  # noqa: E402
 from opus_copy.renderer import SubtitleStyle  # noqa: E402
 from opus_copy.tools import ToolError, probe_tool  # noqa: E402
@@ -71,7 +93,7 @@ class Worker(QObject):
         try:
             outputs = Pipeline(ROOT / "workspace").run(self.url, self.max_clips, self.progress.emit, output_dir=self.output_dir, subtitle_style=self.subtitle_style, language=self.language)
             self.finished.emit([str(p) for p in outputs])
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - worker must report every pipeline failure to the UI
             self.failed.emit(f"{exc}\n\n{traceback.format_exc()}")
 
 class SubtitlePreview(QWidget):
@@ -111,9 +133,9 @@ class VideoCard(QFrame):
 
 class MainWindow(QMainWindow):
     def __init__(self)->None:
-        super().__init__(); self.setWindowTitle("OPUS-COPY"); self.setMinimumSize(1100,780); self.resize(1240,860); self.setStyleSheet(APP_STYLE); self.setWindowIcon(QIcon(str(ROOT/"assets"/"opus-copy-logo.svg"))); self.thread=None; self.worker=None; self.output_dir=ROOT/"workspace"/"clips"; self.output_dir.mkdir(parents=True,exist_ok=True); self.video_cards=[]; self.started_at=0.0
+        super().__init__(); self.setWindowTitle(APP_NAME); self.setMinimumSize(1100,780); self.resize(1240,860); self.setStyleSheet(APP_STYLE); self.setWindowIcon(QApplication.windowIcon()); self.thread=None; self.worker=None; self.output_dir=ROOT/"workspace"/"clips"; self.output_dir.mkdir(parents=True,exist_ok=True); self.video_cards=[]; self.started_at=0.0
         root=QWidget(); root_layout=QVBoxLayout(root); root_layout.setContentsMargins(20,18,20,18); root_layout.setSpacing(11)
-        header=QHBoxLayout(); header.setSpacing(10); logo=QLabel(); logo.setFixedSize(46,46); logo.setPixmap(QIcon(str(ROOT/"assets"/"opus-copy-logo.svg")).pixmap(42,42)); header.addWidget(logo); brand_col=QVBoxLayout(); brand_col.setSpacing(1); brand=QLabel("OPUS-COPY"); brand.setObjectName("brand"); eyebrow=QLabel("AI VIDEO CLIPPER"); eyebrow.setObjectName("eyebrow"); brand_col.addWidget(brand); brand_col.addWidget(eyebrow); header.addLayout(brand_col); header.addStretch(1); engine=QLabel("WHISPERX  •  GEMINI  •  FFMPEG"); engine.setObjectName("muted"); header.addWidget(engine,0,Qt.AlignTop); root_layout.addLayout(header)
+        header=QHBoxLayout(); header.setSpacing(10); logo=QLabel(); logo.setFixedSize(46,46); logo.setPixmap(QApplication.windowIcon().pixmap(42,42)); header.addWidget(logo); brand_col=QVBoxLayout(); brand_col.setSpacing(1); brand=QLabel("OPUS-COPY"); brand.setObjectName("brand"); eyebrow=QLabel("AI VIDEO CLIPPER"); eyebrow.setObjectName("eyebrow"); brand_col.addWidget(brand); brand_col.addWidget(eyebrow); header.addLayout(brand_col); header.addStretch(1); engine=QLabel("FASTER-WHISPER  •  GEMINI  •  FFMPEG"); engine.setObjectName("muted"); header.addWidget(engine,0,Qt.AlignTop); root_layout.addLayout(header)
         self.tabs=QTabWidget(); self.tabs.setDocumentMode(True); self.tabs.addTab(self.build_creation_tab(),"CRIAÇÃO"); self.tabs.addTab(self.build_videos_tab(),"VÍDEOS JÁ CRIADOS"); root_layout.addWidget(self.tabs,1)
         footer=QLabel("OPUS-COPY  /  local-first workflow"); footer.setObjectName("muted"); footer.setAlignment(Qt.AlignCenter); root_layout.addWidget(footer); self.setCentralWidget(root); self.refresh_videos()
     def build_creation_tab(self)->QWidget:
@@ -149,7 +171,7 @@ class MainWindow(QMainWindow):
         self.output_dir.mkdir(parents=True,exist_ok=True); os.startfile(str(self.output_dir))
     @staticmethod
     def format_eta(seconds:float)->str:
-        seconds=max(0,int(round(seconds))); hours,remainder=divmod(seconds,3600); minutes,secs=divmod(remainder,60)
+        seconds=max(0,round(seconds)); hours,remainder=divmod(seconds,3600); minutes,secs=divmod(remainder,60)
         if hours: return f"{hours}h {minutes:02d}min"
         if minutes: return f"{minutes}min {secs:02d}s"
         return f"{secs}s"
@@ -181,7 +203,7 @@ class MainWindow(QMainWindow):
         for col in range(columns): self.video_grid.setColumnStretch(col,1)
 
 def main()->int:
-    app=QApplication(sys.argv); app.setApplicationName("OPUS-COPY"); app.setFont(QFont("Segoe UI",10))
+    configure_windows_app_id(); app=QApplication(sys.argv); app.setApplicationName(APP_NAME); app.setApplicationDisplayName(APP_NAME); app.setDesktopFileName(APP_NAME); app.setWindowIcon(QIcon(str(icon_path()))); app.setFont(QFont("Segoe UI",10))
     try: yt=probe_tool("yt-dlp"); ffmpeg=probe_tool("ffmpeg","-version")
     except ToolError as exc: QMessageBox.critical(None,"OPUS-COPY — dependência ausente",str(exc)); return 1
     window=MainWindow(); window.status.setText(f"Pronto · {yt}  |  {ffmpeg}"); window.show(); return app.exec()

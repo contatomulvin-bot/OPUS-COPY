@@ -7,3 +7,4 @@ yt-dlp-ejs>=0.8,<1
 faster-whisper>=1.1,<2
 opencv-python-headless>=4.10,<5
 pyinstaller>=6.11,<7
+pillow>=11,<13

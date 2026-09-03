@@ -228,12 +228,21 @@ Nunca publique sua API key no GitHub.
 
 ### Desktop Windows
 
+Na primeira inicialização, abra o PowerShell na raiz do projeto e execute somente:
+
 ```powershell
-.\desktop\setup.ps1
-.\desktop\run.ps1
+.\iniciar.ps1
 ```
 
-O setup prepara o ambiente Python, faster-whisper, yt-dlp, EJS e o PO Token Provider usado pelo fluxo de download do YouTube.
+O inicializador detecta a primeira execução e prepara automaticamente Python 3.11, o ambiente virtual, faster-whisper, FFmpeg, yt-dlp, EJS e o ícone do aplicativo. Nas próximas vezes, o mesmo comando abre o programa diretamente.
+
+Se a política de execução do Windows bloquear scripts, use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\iniciar.ps1
+```
+
+O comando antigo `.\desktop\run.ps1` continua funcionando e também faz o setup automaticamente quando necessário.
 
 ## AMD / RX 7600
 
@@ -251,6 +260,7 @@ Para uma instalação que não tenha aceleração AMD funcional, o aplicativo co
 npm run lint
 npm run test
 npm run build
+.\desktop\.venv\Scripts\python.exe -m unittest discover -s desktop\tests -v
 ```
 
 Os testes automatizados cobrem especialmente o ranking determinístico e o quality gate. Testes de download, FFmpeg, GPU e APIs externas dependem do ambiente real.

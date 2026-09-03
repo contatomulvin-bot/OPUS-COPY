@@ -2,8 +2,14 @@
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(SPECPATH).resolve()
 ROOT_PARENT = ROOT.parent
+ICON = ROOT / "assets" / "opus-copy-logo.ico"
+
+if not ICON.is_file():
+    raise FileNotFoundError(
+        "Ícone do aplicativo não encontrado. Execute desktop\\create_icon.py antes do PyInstaller."
+    )
 
 datas = [(str(ROOT / "assets"), "assets")]
 binaries = []
@@ -31,5 +37,5 @@ analysis = Analysis(
     noarchive=False,
 )
 pyz = PYZ(analysis.pure)
-exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name="OPUS-COPY", debug=False, bootloader_ignore_signals=False, strip=False, upx=False, console=False, icon=str(ROOT / "assets" / "opus-copy-logo.ico") if (ROOT / "assets" / "opus-copy-logo.ico").is_file() else None)
+exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name="OPUS-COPY", debug=False, bootloader_ignore_signals=False, strip=False, upx=False, console=False, icon=str(ICON))
 coll = COLLECT(exe, analysis.binaries, analysis.datas, strip=False, upx=False, name="OPUS-COPY")

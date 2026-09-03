@@ -165,7 +165,7 @@ class YouTubeDownloader:
         output_dir.mkdir(parents=True, exist_ok=True)
         start = max(0.0, float(clip.start))
         end = max(start + 0.1, float(clip.end))
-        cache_key = hashlib.sha256(f"{clean_url}|{start:.3f}|{end:.3f}".encode("utf-8")).hexdigest()[:16]
+        cache_key = hashlib.sha256(f"{clean_url}|{start:.3f}|{end:.3f}".encode()).hexdigest()[:16]
         stem = f"section_{index:02d}_{cache_key}"
         existing = sorted(p for p in output_dir.glob(stem + ".*") if p.is_file() and p.stat().st_size > 0)
         if existing:

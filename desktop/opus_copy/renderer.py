@@ -9,12 +9,12 @@ from .tools import ToolError, require_executable, run_process
 
 
 def _srt_time(seconds: float) -> str:
-    ms = max(0, int(round(seconds * 1000))); h, ms = divmod(ms, 3_600_000); m, ms = divmod(ms, 60_000); s, ms = divmod(ms, 1000)
+    ms = max(0, round(seconds * 1000)); h, ms = divmod(ms, 3_600_000); m, ms = divmod(ms, 60_000); s, ms = divmod(ms, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
 def _ass_time(seconds: float) -> str:
-    value = max(0, int(round(seconds * 100))); h, value = divmod(value, 360000); m, value = divmod(value, 6000); s, cs = divmod(value, 100)
+    value = max(0, round(seconds * 100)); h, value = divmod(value, 360000); m, value = divmod(value, 6000); s, cs = divmod(value, 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
@@ -52,7 +52,7 @@ class SubtitleStyle:
 
 
 def write_ass(transcript: dict, clip: ClipCandidate, path: Path, style: SubtitleStyle) -> None:
-    position = max(5, min(95, int(style.vertical_position))); y = int(round(1920 * position / 100)); alignment = 5
+    position = max(5, min(95, int(style.vertical_position))); y = round(1920 * position / 100); alignment = 5
     back_alpha = max(0, min(100, int(style.background_opacity))); back_alpha_ass = 255 - round(back_alpha * 2.55)
     back_color = _ass_color(style.background_color, "#000000"); text_color = _ass_color(style.text_color, "#FFFFFF"); outline_color = _ass_color(style.outline_color, "#000000"); bold = -1 if style.bold else 0
     lines = ["[Script Info]", "ScriptType: v4.00+", "PlayResX: 1080", "PlayResY: 1920", "ScaledBorderAndShadow: yes", "", "[V4+ Styles]", "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding", f"Style: Default,{style.font_family},{max(10, int(style.font_size))},{text_color},{text_color},{outline_color},&H{back_alpha_ass:02X}{back_color[4:]},{bold},0,0,0,100,100,0,0,3,{max(0, int(style.outline_width))},{max(0, int(style.shadow))},{alignment},40,40,0,1", "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
@@ -101,9 +101,9 @@ class ClipRenderer:
         if not source.exists() or source.stat().st_size == 0: raise ToolError(f"Arquivo de entrada inválido: {source}")
         output.parent.mkdir(parents=True, exist_ok=True); ass = output.with_suffix(".ass"); write_ass(transcript, clip, ass, self.subtitle_style)
         try:
-            crop_x, crop_width, framing_mode = find_subject_crop_x(source) if self.auto_reframe else (0, 0, "center")
-        except Exception:
-            crop_x, crop_width, framing_mode = 0, 0, "center"
+            crop_x, crop_width, _ = find_subject_crop_x(source) if self.auto_reframe else (0, 0, "center")
+        except Exception:  # noqa: BLE001 - face detection is optional; center crop is the safe fallback
+            crop_x, crop_width = 0, 0
         if crop_width > 0:
             vf_crop = f"crop={crop_width}:ih:{crop_x}:0"
         else:

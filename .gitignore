@@ -6,3 +6,13 @@ coverage/
 *.log
 .env*
 !.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.verify-venv/
+.verify-debs/
+.verify-libs/
+desktop/.venv/
+desktop/workspace/
+desktop/runtime/

@@ -1,116 +1,211 @@
 $ErrorActionPreference = 'Stop'
-Set-Location (Split-Path -Parent $PSScriptRoot)
 
-Write-Host '== OPUS-COPY Desktop / Python setup ==' -ForegroundColor Cyan
+$projectRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $projectRoot
 
-$python = Get-Command py -ErrorAction SilentlyContinue
-if (-not $python) { throw 'Python Launcher (py) não encontrado. Instale Python 3.11 x64.' }
-
-$venv = Join-Path (Get-Location) 'desktop\.venv'
-if (-not (Test-Path (Join-Path $venv 'Scripts\python.exe'))) {
-  & py -3.11 -m venv $venv
+function Update-ProcessPath {
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  $env:Path = @($machinePath, $userPath) -join ';'
 }
 
-$venvPython = Join-Path (Get-Location) 'desktop\.venv\Scripts\python.exe'
+function Get-Python311Command {
+  $launcher = Get-Command py -ErrorAction SilentlyContinue
+  if ($launcher) {
+    & $launcher.Source -3.11 -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else 1)" *> $null
+    if ($LASTEXITCODE -eq 0) {
+      return [PSCustomObject]@{ File = $launcher.Source; Args = @('-3.11') }
+    }
+  }
+
+  foreach ($name in @('python3.11', 'python')) {
+    $candidate = Get-Command $name -ErrorAction SilentlyContinue
+    if (-not $candidate) { continue }
+    & $candidate.Source -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else 1)" *> $null
+    if ($LASTEXITCODE -eq 0) {
+      return [PSCustomObject]@{ File = $candidate.Source; Args = @() }
+    }
+  }
+  return $null
+}
+
+function Install-WithWinget([string]$Id, [string]$DisplayName) {
+  $winget = Get-Command winget -ErrorAction SilentlyContinue
+  if (-not $winget) {
+    throw "$DisplayName não foi encontrado e o winget não está disponível. Instale $DisplayName e execute novamente."
+  }
+  Write-Host "Instalando/atualizando $DisplayName..." -ForegroundColor Yellow
+  & $winget.Source install --id $Id --exact --accept-package-agreements --accept-source-agreements
+  if ($LASTEXITCODE -ne 0) {
+    throw "O winget não conseguiu instalar $DisplayName (pacote $Id)."
+  }
+  Update-ProcessPath
+}
+
+function Restore-CpuCTranslate2([string]$Python) {
+  Write-Warning 'A aceleração ROCm não ficou disponível. Restaurando CTranslate2 para CPU; o aplicativo continuará funcionando.'
+  & $Python -m pip install --no-cache-dir --force-reinstall 'ctranslate2>=4.4,<5'
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Também não foi possível restaurar o CTranslate2 para CPU.'
+  }
+}
+
+Write-Host '== OPUS-COPY Desktop / configuração automática ==' -ForegroundColor Cyan
+
+$pythonCommand = Get-Python311Command
+if (-not $pythonCommand) {
+  Install-WithWinget 'Python.Python.3.11' 'Python 3.11 x64'
+  $pythonCommand = Get-Python311Command
+}
+if (-not $pythonCommand) {
+  throw 'Python 3.11 x64 não foi encontrado após a instalação. Feche e abra o PowerShell e tente novamente.'
+}
+
+$pythonArgs = @($pythonCommand.Args)
+$pythonFile = $pythonCommand.File
+$pythonVersion = (& $pythonFile @pythonArgs -c "import platform; print(platform.python_version())").Trim()
+Write-Host "Python $pythonVersion encontrado." -ForegroundColor Green
+
+$venv = Join-Path $PSScriptRoot '.venv'
+$venvPython = Join-Path $venv 'Scripts\python.exe'
+if (Test-Path $venvPython) {
+  & $venvPython -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else 1)" *> $null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host 'O ambiente virtual existente usa outra versão do Python. Recriando...' -ForegroundColor Yellow
+    Remove-Item -Recurse -Force $venv
+  }
+}
+if (-not (Test-Path $venvPython)) {
+  & $pythonFile @pythonArgs -m venv $venv
+  if ($LASTEXITCODE -ne 0) { throw 'Não foi possível criar o ambiente virtual Python.' }
+}
+
+$env:Path = "$(Join-Path $venv 'Scripts');$env:Path"
+$env:PYTHONUTF8 = '1'
+
 & $venvPython -m pip install --upgrade pip
-& $venvPython -m pip install -r desktop\requirements.txt
+if ($LASTEXITCODE -ne 0) { throw 'A atualização do pip falhou.' }
+& $venvPython -m pip install -r (Join-Path $PSScriptRoot 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'A instalação das dependências Python falhou.' }
 
-& $venvPython -c "import PySide6, yt_dlp, yt_dlp_ejs, faster_whisper; print('Desktop dependencies OK')"
-if ($LASTEXITCODE -ne 0) { throw 'A validação das dependências falhou.' }
+& $venvPython -c "import PySide6, dotenv, google.genai, yt_dlp, yt_dlp_ejs, faster_whisper, cv2; print('Dependências Python OK')"
+if ($LASTEXITCODE -ne 0) { throw 'A validação das dependências Python falhou.' }
 
-# faster-whisper uses CTranslate2. On AMD RDNA2/RDNA3/RDNA4 under Windows,
-# install the ROCm runtime + the matching CTranslate2 ROCm wheel so the
-# Whisper engine can run on the Radeon GPU instead of silently falling back to CPU.
+# A falha na tentativa de aceleração AMD nunca deve impedir o app de abrir:
+# CPU/int8 continua sendo um fallback compatível.
 $gpuNames = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
 $amdGpu = ($gpuNames -join ' ') -match 'AMD|Radeon'
-
 if ($amdGpu) {
-  Write-Host 'AMD Radeon detectada. Configurando faster-whisper + ROCm para GPU...' -ForegroundColor Yellow
+  Write-Host "AMD Radeon detectada: $($gpuNames -join ', ')" -ForegroundColor Yellow
+  Write-Host 'Tentando configurar faster-whisper + ROCm para GPU...' -ForegroundColor Yellow
 
   & $venvPython -m pip install --no-cache-dir `
     'https://repo.radeon.com/rocm/windows/rocm-rel-7.2/rocm_sdk_core-7.2.0.dev0-py3-none-win_amd64.whl' `
     'https://repo.radeon.com/rocm/windows/rocm-rel-7.2/rocm_sdk_libraries_custom-7.2.0.dev0-py3-none-win_amd64.whl' `
     'https://repo.radeon.com/rocm/windows/rocm-rel-7.2/rocm-7.2.0.dev0.tar.gz'
-  if ($LASTEXITCODE -ne 0) {
-    throw 'Não foi possível instalar o runtime ROCm 7.2. Verifique o driver AMD Adrenalin 26.1.1+ e execute o setup novamente.'
+  $rocmRuntimeReady = $LASTEXITCODE -eq 0
+
+  if ($rocmRuntimeReady) {
+    $rocmCt2 = 'https://github.com/PinW/ctranslate2-rocm-wheels/releases/download/v4.7.1-rocm72/ctranslate2-4.7.1-cp311-cp311-win_amd64.whl'
+    & $venvPython -m pip install --no-cache-dir $rocmCt2 --force-reinstall --no-deps
+    $rocmRuntimeReady = $LASTEXITCODE -eq 0
   }
 
-  # The official ROCm Windows CTranslate2 wheel is shipped inside the release
-  # archive. This direct wheel mirror exposes the exact Python 3.11 wheel.
-  $rocmCt2 = 'https://github.com/PinW/ctranslate2-rocm-wheels/releases/download/v4.7.1-rocm72/ctranslate2-4.7.1-cp311-cp311-win_amd64.whl'
-  & $venvPython -m pip install --no-cache-dir $rocmCt2 --force-reinstall --no-deps
-  if ($LASTEXITCODE -ne 0) {
-    throw 'Não foi possível instalar o CTranslate2 ROCm para faster-whisper.'
+  if ($rocmRuntimeReady) {
+    & $venvPython -c "import ctranslate2; count=ctranslate2.get_cuda_device_count(); print('CTranslate2', ctranslate2.__version__, '| GPU devices:', count); raise SystemExit(0 if count > 0 else 1)"
+    $rocmRuntimeReady = $LASTEXITCODE -eq 0
   }
 
-  & $venvPython -c "import ctranslate2; print('CTranslate2', ctranslate2.__version__); print('GPU devices:', ctranslate2.get_cuda_device_count())"
-  if ($LASTEXITCODE -ne 0) {
-    throw 'CTranslate2 ROCm foi instalado, mas a GPU não pôde ser detectada. Verifique o driver AMD/ROCm.'
+  if (-not $rocmRuntimeReady) {
+    Restore-CpuCTranslate2 $venvPython
+  } else {
+    Write-Host 'Aceleração AMD/ROCm validada.' -ForegroundColor Green
   }
 } else {
-  Write-Host 'GPU AMD não detectada. Mantendo faster-whisper em CPU/int8.' -ForegroundColor DarkYellow
+  Write-Host 'GPU AMD não detectada. faster-whisper usará CPU/int8 quando CUDA não estiver disponível.' -ForegroundColor DarkYellow
 }
 
-# YouTube PO Token provider + supported JS runtime.
+$ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
+$ffprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
+if (-not $ffmpeg -or -not $ffprobe) {
+  Install-WithWinget 'Gyan.FFmpeg' 'FFmpeg/FFprobe'
+  $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
+  $ffprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
+}
+if (-not $ffmpeg -or -not $ffprobe) {
+  throw 'FFmpeg ou FFprobe não foi encontrado após a instalação. Feche e abra o PowerShell e execute .\iniciar.ps1 novamente.'
+}
+Write-Host 'FFmpeg e FFprobe encontrados.' -ForegroundColor Green
+
+# yt-dlp EJS benefits from Node 22+ and the optional PO Token server.
 $node = Get-Command node -ErrorAction SilentlyContinue
-if (-not $node) {
-  $winget = Get-Command winget -ErrorAction SilentlyContinue
-  if (-not $winget) {
-    throw 'Node.js não encontrado e o winget também não está disponível. Instale Node.js 22+ LTS e execute este setup novamente.'
-  }
-  Write-Host 'Node.js não encontrado. Instalando Node.js LTS...' -ForegroundColor Yellow
-  & winget install --id OpenJS.NodeJS.LTS --exact --accept-package-agreements --accept-source-agreements
-  $node = Get-Command node -ErrorAction SilentlyContinue
-  if (-not $node) {
-    $nodePath = Join-Path ${env:ProgramFiles} 'nodejs\node.exe'
-    if (Test-Path $nodePath) {
-      $env:Path = "$(Split-Path $nodePath);$env:Path"
-      $node = Get-Command node -ErrorAction SilentlyContinue
-    }
-  }
+$nodeMajor = 0
+if ($node) {
+  $nodeVersion = (& $node.Source --version).Trim()
+  try { $nodeMajor = [int](($nodeVersion -replace '^v', '').Split('.')[0]) } catch { $nodeMajor = 0 }
 }
-if (-not $node) { throw 'Node.js LTS não pôde ser encontrado após a instalação.' }
-
-$nodeVersion = (& node --version).Trim()
-$nodeMajor = [int](($nodeVersion -replace '^v', '').Split('.')[0])
 if ($nodeMajor -lt 22) {
-  throw "Node.js $nodeVersion encontrado. O yt-dlp-ejs atual exige Node.js 22+. Atualize o Node.js e execute este setup novamente."
+  Install-WithWinget 'OpenJS.NodeJS.LTS' 'Node.js 22+ LTS'
+  $node = Get-Command node -ErrorAction SilentlyContinue
+  if ($node) {
+    $nodeVersion = (& $node.Source --version).Trim()
+    try { $nodeMajor = [int](($nodeVersion -replace '^v', '').Split('.')[0]) } catch { $nodeMajor = 0 }
+  }
 }
-Write-Host "Node.js $nodeVersion OK (>= 22)" -ForegroundColor Green
+if (-not $node -or $nodeMajor -lt 22) {
+  throw 'Node.js 22+ não foi encontrado após a instalação. Feche e abra o PowerShell e tente novamente.'
+}
+Write-Host "Node.js $nodeVersion OK." -ForegroundColor Green
 
-$potRoot = Join-Path $env:USERPROFILE 'bgutil-ytdlp-pot-provider'
-if (-not (Test-Path (Join-Path $potRoot '.git'))) {
-  Write-Host 'Baixando bgutil-ytdlp-pot-provider 1.3.2...' -ForegroundColor Yellow
-  & git clone --depth 1 --branch 1.3.2 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git $potRoot
-  if ($LASTEXITCODE -ne 0) { throw 'Não foi possível baixar o PO Token Provider.' }
+$git = Get-Command git -ErrorAction SilentlyContinue
+if (-not $git) {
+  Write-Warning 'Git não encontrado. O app abrirá normalmente, mas o PO Token Provider opcional não será instalado.'
 } else {
-  Write-Host 'Atualizando bgutil-ytdlp-pot-provider...' -ForegroundColor Yellow
-  Push-Location $potRoot
-  & git fetch --depth 1 origin tag 1.3.2
-  & git checkout --force 1.3.2
-  $checkoutCode = $LASTEXITCODE
-  Pop-Location
-  if ($checkoutCode -ne 0) { throw 'Não foi possível atualizar o PO Token Provider.' }
+  $potRoot = Join-Path $env:USERPROFILE 'bgutil-ytdlp-pot-provider'
+  $providerReady = $true
+  if (-not (Test-Path (Join-Path $potRoot '.git'))) {
+    Write-Host 'Baixando o PO Token Provider do YouTube...' -ForegroundColor Yellow
+    & $git.Source clone --depth 1 --branch 1.3.2 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git $potRoot
+    $providerReady = $LASTEXITCODE -eq 0
+  }
+
+  $potServer = Join-Path $potRoot 'server'
+  if ($providerReady -and (Test-Path (Join-Path $potServer 'package.json'))) {
+    Push-Location $potServer
+    try {
+      & npm ci
+      $providerReady = $LASTEXITCODE -eq 0
+      if ($providerReady) {
+        & npx tsc
+        $providerReady = $LASTEXITCODE -eq 0
+      }
+    } finally {
+      Pop-Location
+    }
+  } else {
+    $providerReady = $false
+  }
+
+  if ($providerReady) {
+    Write-Host 'PO Token Provider configurado.' -ForegroundColor Green
+  } else {
+    Write-Warning 'O PO Token Provider opcional não pôde ser configurado. O app abrirá; downloads restritos pelo YouTube podem exigir cookies.'
+  }
 }
 
-$potServer = Join-Path $potRoot 'server'
-if (-not (Test-Path (Join-Path $potServer 'package.json'))) {
-  throw "Provider não encontrado em $potServer"
-}
-
-Push-Location $potServer
-& npm ci
-if ($LASTEXITCODE -ne 0) { Pop-Location; throw 'A instalação do Node.js do PO Token Provider falhou.' }
-& npx tsc
-$compileCode = $LASTEXITCODE
-Pop-Location
-if ($compileCode -ne 0) { throw 'A compilação do PO Token Provider falhou.' }
-
-Write-Host 'Validando instalação do PO Token Provider e EJS...' -ForegroundColor Yellow
-& $venvPython -m yt_dlp -v --ignore-config --version 2>&1 | Select-String -Pattern 'yt-dlp|yt_dlp_ejs|bgutil|JS runtimes' | Select-Object -First 20
+& $venvPython -m yt_dlp --ignore-config --version
 if ($LASTEXITCODE -ne 0) { throw 'Não foi possível executar o yt-dlp do ambiente desktop.' }
 
-Write-Host 'Setup concluído com faster-whisper + ROCm (AMD, quando disponível), EJS e suporte a PO Token.' -ForegroundColor Green
-Write-Host 'Para iniciar:' -ForegroundColor Green
-Write-Host '.\desktop\run.ps1'
+& $venvPython (Join-Path $PSScriptRoot 'create_icon.py')
+if ($LASTEXITCODE -ne 0) { throw 'Não foi possível criar o ícone do OPUS-COPY.' }
+
+$setupVersionFile = Join-Path $PSScriptRoot 'setup-version.txt'
+$installedVersionFile = Join-Path $venv 'opus-copy-setup-version.txt'
+if (Test-Path $setupVersionFile) {
+  Copy-Item $setupVersionFile $installedVersionFile -Force
+}
+
+Write-Host ''
+Write-Host 'Configuração concluída.' -ForegroundColor Green
+Write-Host 'Nas próximas vezes, inicie somente com:' -ForegroundColor Green
+Write-Host '.\iniciar.ps1' -ForegroundColor White

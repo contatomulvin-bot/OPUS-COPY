@@ -37,7 +37,7 @@ class WhisperXTranscriber:
             get_count = getattr(ctranslate2, "get_cuda_device_count", None)
             if callable(get_count):
                 return int(get_count()) > 0
-        except Exception:
+        except Exception:  # noqa: BLE001 - unsupported/broken GPU runtimes must fall back to CPU
             return False
         return False
 
@@ -58,10 +58,16 @@ class WhisperXTranscriber:
 
     @staticmethod
     def _thread_settings() -> tuple[int, int]:
+        # Some CTranslate2 Windows/ROCm builds reject ``None`` for
+        # ``intra_threads``.  Always pass a concrete, positive integer instead
+        # of relying on faster-whisper's automatic/default thread handling.
+        default_cpu_threads = max(1, min(os.cpu_count() or 4, 8))
         try:
-            cpu_threads = max(0, int(os.getenv("WHISPER_CPU_THREADS", "0")))
+            cpu_threads = int(os.getenv("WHISPER_CPU_THREADS", str(default_cpu_threads)))
+            if cpu_threads < 1:
+                cpu_threads = default_cpu_threads
         except ValueError:
-            cpu_threads = 0
+            cpu_threads = default_cpu_threads
         try:
             num_workers = max(1, int(os.getenv("WHISPER_NUM_WORKERS", "1")))
         except ValueError:

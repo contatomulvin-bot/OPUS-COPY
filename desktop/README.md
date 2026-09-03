@@ -7,23 +7,31 @@ Primeira versão do aplicativo desktop em Python/PySide6.
 No PowerShell, na raiz do repositório:
 
 ```powershell
-.\desktop\setup.ps1
+.\iniciar.ps1
 ```
 
-Depois:
+Na primeira execução, esse comando cria o ambiente Python e instala as dependências. Depois disso, o mesmo comando abre o aplicativo diretamente. Se a política de execução do Windows bloquear o arquivo:
 
 ```powershell
-.\desktop\run.ps1
+powershell -ExecutionPolicy Bypass -File .\iniciar.ps1
 ```
 
 O aplicativo usa localmente:
 
 - yt-dlp para obter o vídeo do YouTube;
 - FFmpeg para mídia e renderização;
-- WhisperX para transcrição com timestamps de palavras;
+- faster-whisper para transcrição com timestamps de palavras;
 - Gemini para selecionar e pontuar os melhores momentos;
 - PySide6 para a interface desktop.
 
-Defina `GEMINI_API_KEY` no `.env` para habilitar a análise por IA. O processamento de WhisperX usa CPU por padrão para manter compatibilidade com Windows + AMD; `WHISPERX_DEVICE` e `WHISPERX_MODEL` podem ser ajustados por ambiente.
+Defina `GEMINI_API_KEY` no `.env` para habilitar a análise por IA. O dispositivo é detectado automaticamente; em uma instalação sem aceleração compatível, o faster-whisper volta para CPU. `WHISPER_DEVICE`, `WHISPER_MODEL` e `WHISPER_COMPUTE_TYPE` podem ser ajustados no ambiente.
 
-A versão atual é o núcleo funcional inicial. O próximo estágio é adicionar fila de jobs, prévia dos clips, escolha manual dos candidatos, tracking automático de rosto para reframe e empacotamento em instalador `.exe`.
+A logo em `assets/opus-copy-logo.svg` é convertida automaticamente para um `.ico` com várias resoluções e aplicada à janela, à barra de tarefas do Windows e ao executável criado pelo PyInstaller.
+
+Para criar o executável após a configuração:
+
+```powershell
+.\desktop\build.ps1
+```
+
+O resultado fica em `desktop\dist\OPUS-COPY\OPUS-COPY.exe`.

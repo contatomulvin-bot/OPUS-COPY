@@ -33,7 +33,7 @@ def find_subject_crop_x(source: Path, sample_seconds: float = 1.0) -> tuple[int,
         duration = frames / fps if fps > 0 else 0
         if width <= 0 or height <= 0:
             return 0, 0, "center"
-        crop_width = min(width, max(1, int(round(height * 9 / 16))))
+        crop_width = min(width, max(1, round(height * 9 / 16)))
         if width <= crop_width:
             return 0, crop_width, "full"
 
@@ -62,15 +62,15 @@ def find_subject_crop_x(source: Path, sample_seconds: float = 1.0) -> tuple[int,
             faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(35, 35))
             if len(faces) == 0:
                 continue
-            x, y, w, h = max(faces, key=lambda item: item[2] * item[3])
+            x, _y, w, _h = max(faces, key=lambda item: item[2] * item[3])
             center_small = x + w / 2
-            centers.append(int(round(center_small / scale)))
+            centers.append(round(center_small / scale))
 
         if not centers:
             return (width - crop_width) // 2, crop_width, "center"
 
         # Median avoids a single false detection causing a large jump.
-        subject_center = int(round(median(centers)))
+        subject_center = round(median(centers))
         crop_x = _clamp(subject_center - crop_width // 2, 0, width - crop_width)
         return crop_x, crop_width, "face"
     finally:

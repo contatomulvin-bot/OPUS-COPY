@@ -133,11 +133,9 @@ class Pipeline:
             section_paths: list[tuple[int, object, Path]] = []
             with ThreadPoolExecutor(max_workers=download_workers, thread_name_prefix="opus-download") as executor:
                 futures = {executor.submit(downloader.download_section, url, sections_dir, index, clip): (index, clip) for index, clip in enumerate(clips, 1)}
-                completed = 0
-                for future in as_completed(futures):
+                for completed, future in enumerate(as_completed(futures), 1):
                     index, clip = futures[future]
                     section_paths.append((index, clip, future.result()))
-                    completed += 1
                     report(f"Trecho {completed}/{len(clips)} baixado.", 60 + round(completed / len(clips) * 20))
             section_paths.sort(key=lambda item: item[0])
 
@@ -157,11 +155,9 @@ class Pipeline:
 
             with ThreadPoolExecutor(max_workers=render_workers, thread_name_prefix="opus-render") as executor:
                 futures = [executor.submit(render_one, index, clip, source) for index, clip, source in section_paths]
-                completed = 0
-                for future in as_completed(futures):
+                for completed, future in enumerate(as_completed(futures), 1):
                     index, output = future.result()
                     outputs[index - 1] = output
-                    completed += 1
                     report(f"Clip {completed}/{len(clips)} pronto: {output.name}", 80 + round(completed / len(clips) * 20))
 
             output_names = [p.name for p in outputs if p.is_file()]

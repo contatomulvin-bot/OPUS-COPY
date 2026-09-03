@@ -4,6 +4,15 @@ import os
 import sys
 
 
+def safe_cpu_threads():
+    default = max(1, min(os.cpu_count() or 4, 8))
+    try:
+        value = int(os.environ.get('WHISPER_CPU_THREADS', str(default)))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--audio', required=True)
@@ -29,7 +38,7 @@ def main():
         try:
             align_model, metadata = whisperx.load_align_model(language_code=language, device=device)
             result = whisperx.align(result['segments'], align_model, metadata, args.audio, device, return_char_alignments=False)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - alignment is optional and falls back below
             print(f'WHISPERX_ALIGNMENT_WARNING: {exc}', file=sys.stderr)
 
         output = {
@@ -41,14 +50,20 @@ def main():
             print(json.dumps(output, ensure_ascii=False))
             return 0
         raise RuntimeError('WhisperX retornou transcrição vazia.')
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any WhisperX failure activates faster-whisper
         print(f'WHISPERX_WARNING: {exc}', file=sys.stderr)
 
     # Last local fallback: faster-whisper does not need the alignment model.
     # It still returns word timestamps when word_timestamps=True.
     try:
         from faster_whisper import WhisperModel
-        model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        model = WhisperModel(
+            model_name,
+            device=device,
+            compute_type=compute_type,
+            cpu_threads=safe_cpu_threads(),
+            num_workers=1,
+        )
         segments_iter, info = model.transcribe(args.audio, language=args.language, word_timestamps=True, vad_filter=True)
         segments = []
         texts = []
@@ -63,7 +78,7 @@ def main():
             raise RuntimeError('faster-whisper retornou transcrição vazia.')
         print(json.dumps({'language': getattr(info, 'language', None) or args.language or 'pt', 'text': text, 'segments': segments}, ensure_ascii=False))
         return 0
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - command-line boundary must return a clean error code
         print(f'FASTER_WHISPER_ERROR: {exc}', file=sys.stderr)
         return 4
 
