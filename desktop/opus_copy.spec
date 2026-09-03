@@ -9,8 +9,7 @@ datas = [(str(ROOT / "assets"), "assets")]
 binaries = []
 hiddenimports = []
 
-# Bundle only the runtimes actually used by the desktop app.
-for package in ("torch", "torchaudio", "faster_whisper", "ctranslate2", "google.genai"):
+for package in ("torch", "torchaudio", "faster_whisper", "ctranslate2", "google.genai", "cv2"):
     try:
         d, b, h = collect_all(package)
         datas.extend(d)
@@ -31,28 +30,6 @@ analysis = Analysis(
     excludes=["tkinter", "whisperx", "pyannote.audio"],
     noarchive=False,
 )
-
 pyz = PYZ(analysis.pure)
-
-exe = EXE(
-    pyz,
-    analysis.scripts,
-    [],
-    exclude_binaries=True,
-    name="OPUS-COPY",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=False,
-    icon=str(ROOT / "assets" / "opus-copy-logo.ico") if (ROOT / "assets" / "opus-copy-logo.ico").is_file() else None,
-)
-
-coll = COLLECT(
-    exe,
-    analysis.binaries,
-    analysis.datas,
-    strip=False,
-    upx=False,
-    name="OPUS-COPY",
-)
+exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name="OPUS-COPY", debug=False, bootloader_ignore_signals=False, strip=False, upx=False, console=False, icon=str(ROOT / "assets" / "opus-copy-logo.ico") if (ROOT / "assets" / "opus-copy-logo.ico").is_file() else None)
+coll = COLLECT(exe, analysis.binaries, analysis.datas, strip=False, upx=False, name="OPUS-COPY")
