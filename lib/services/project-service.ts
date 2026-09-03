@@ -8,6 +8,7 @@ export class ProjectService {
       orderBy: { updatedAt: 'desc' },
       include: {
         videos: {
+          orderBy: { createdAt: 'desc' },
           include: {
             clips: {
               include: {
@@ -35,6 +36,8 @@ export class ProjectService {
         videoCount: p.videos.length,
         clipCount: allClips.length,
         completedRendersCount: totalRenders,
+        // IMPORTANT: videos are ordered newest-first, so this can never point
+        // at an older source after a new URL/upload is added to the project.
         primaryVideo: p.videos[0] || null,
       };
     });
@@ -46,7 +49,9 @@ export class ProjectService {
     const project = await prisma.project.findUnique({
       where: { id },
       include: {
+        // Deterministic source selection: newest video is always first.
         videos: {
+          orderBy: { createdAt: 'desc' },
           include: {
             transcript: {
               include: {
