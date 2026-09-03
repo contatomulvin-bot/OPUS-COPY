@@ -74,7 +74,47 @@ class ResponsiveMainWindow(app_main.MainWindow):
         self._apply_responsive_layout()
 
     def refresh_videos(self) -> None:
-        super().refresh_videos()
+        """Refresh only the outputs belonging to the latest completed generation."""
+        if not hasattr(self, "video_grid"):
+            return
+
+        while self.video_grid.count():
+            item = self.video_grid.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        self.video_cards.clear()
+
+        manifest_path = ROOT / "workspace" / "analysis" / "current_run.json"
+        current_outputs: list[str] = []
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if manifest.get("status") == "completed":
+                current_outputs = [str(name) for name in manifest.get("outputs", []) if name]
+        except (OSError, ValueError, TypeError):
+            current_outputs = []
+
+        if current_outputs:
+            files = [self.output_dir / name for name in current_outputs if (self.output_dir / name).is_file()]
+        else:
+            # Backward-compatible fallback for installations that predate current_run.json.
+            files = sorted(self.output_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+        if not files:
+            empty = QLabel("Nenhum clip da última geração.\nGere uma nova análise e os clips aparecerão aqui automaticamente.")
+            empty.setObjectName("muted")
+            empty.setAlignment(app_main.Qt.AlignCenter)
+            self.video_grid.addWidget(empty, 0, 0)
+            return
+
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        columns = 2 if len(files) > 1 else 1
+        for index, path in enumerate(files):
+            card = AnalyticsVideoCard(path)
+            self.video_cards.append(card)
+            self.video_grid.addWidget(card, index // columns, index % columns)
+        for col in range(columns):
+            self.video_grid.setColumnStretch(col, 1)
         QTimer.singleShot(40, lambda: apple_ui.animate_cards(self))
 
     def _apply_responsive_layout(self) -> None:
