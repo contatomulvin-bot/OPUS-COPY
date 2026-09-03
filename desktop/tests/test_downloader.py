@@ -1,12 +1,48 @@
 import os
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from opus_copy.downloader import YouTubeDownloader
 
 
 class DownloaderRuntimeTests(unittest.TestCase):
+    def test_download_audio_finds_cache_specific_output_name(self):
+        downloader = YouTubeDownloader.__new__(YouTubeDownloader)
+        downloader.executable = "yt-dlp"
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            template = output_dir / "analysis_audio_abc123.%(ext)s"
+
+            def successful_download(_args, timeout):
+                self.assertEqual(timeout, 6 * 60 * 60)
+                (output_dir / "analysis_audio_abc123.m4a").write_bytes(b"audio")
+                return subprocess.CompletedProcess([], 0, stdout="download complete", stderr="")
+
+            with patch.object(downloader, "_run", side_effect=successful_download):
+                result = downloader.download_audio("https://www.youtube.com/watch?v=test", output_dir, template)
+
+            self.assertEqual(result, output_dir / "analysis_audio_abc123.m4a")
+
+    def test_download_audio_reuses_cache_specific_output(self):
+        downloader = YouTubeDownloader.__new__(YouTubeDownloader)
+        downloader.executable = "yt-dlp"
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            cached = output_dir / "analysis_audio_abc123.m4a"
+            cached.write_bytes(b"audio")
+            template = output_dir / "analysis_audio_abc123.%(ext)s"
+
+            with patch.object(downloader, "_run") as run:
+                result = downloader.download_audio("https://www.youtube.com/watch?v=test", output_dir, template)
+
+            self.assertEqual(result, cached)
+            run.assert_not_called()
+
     def test_base_args_isolate_yt_dlp_from_external_plugins(self):
         downloader = YouTubeDownloader.__new__(YouTubeDownloader)
         downloader.executable = "yt-dlp"

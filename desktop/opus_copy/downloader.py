@@ -126,7 +126,8 @@ class YouTubeDownloader:
                 path = success_check()
                 if path:
                     return path
-                errors.append(f"{label}: yt-dlp terminou sem criar o arquivo esperado.")
+                details = combined[-4000:] if combined else "yt-dlp não mostrou detalhes."
+                errors.append(f"{label}: yt-dlp terminou sem criar o arquivo esperado.\n{details}")
                 continue
             if browser_arg is not None and self._is_cookie_database_error(combined):
                 errors.append(f"{label}: cookies não puderam ser lidos/descriptografados; tentando outra opção.")
@@ -146,11 +147,23 @@ class YouTubeDownloader:
             raise ToolError("Informe uma URL do YouTube.")
         output_dir.mkdir(parents=True, exist_ok=True)
         output = output or (output_dir / "analysis_audio.%(ext)s")
-        final_candidates = list(output_dir.glob("analysis_audio.*"))
-        if final_candidates:
-            newest = max((p for p in final_candidates if p.is_file() and p.stat().st_size > 0), key=lambda p: p.stat().st_mtime, default=None)
-            if newest:
-                return newest
+        output.parent.mkdir(parents=True, exist_ok=True)
+        audio_extensions = {".m4a", ".mp3", ".webm", ".opus", ".wav", ".aac", ".ogg", ".flac"}
+
+        def find_audio() -> Path | None:
+            # The pipeline uses a cache-specific template such as
+            # analysis_audio_<hash>.%(ext)s.  Searching for analysis_audio.*
+            # incorrectly rejected a successful yt-dlp download.
+            pattern = output.name.replace("%(ext)s", "*")
+            candidates = [
+                path for path in output.parent.glob(pattern)
+                if path.is_file() and path.suffix.lower() in audio_extensions and path.stat().st_size > 0
+            ]
+            return max(candidates, key=lambda path: path.stat().st_mtime, default=None)
+
+        cached = find_audio()
+        if cached:
+            return cached
 
         def build(browser_arg: str | None) -> list[str]:
             args = self._base_args() + ["-f", "ba/b", "-x", "--audio-format", "m4a", "-o", str(output)]
@@ -160,8 +173,7 @@ class YouTubeDownloader:
             return args
 
         def check() -> Path | None:
-            paths = [p for p in output_dir.glob("analysis_audio.*") if p.is_file() and p.stat().st_size > 0]
-            return max(paths, key=lambda p: p.stat().st_mtime) if paths else None
+            return find_audio()
         return self._run_with_browser_fallbacks(build, output_dir, check, "download do áudio")
 
     def download_section(self, url: str, output_dir: Path, index: int, clip) -> Path:
