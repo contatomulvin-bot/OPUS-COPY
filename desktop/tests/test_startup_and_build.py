@@ -1,15 +1,20 @@
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from opus_copy.tools import find_executable
+from opus_copy.tools import _runtime_dirs, find_executable
 
 DESKTOP_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = DESKTOP_ROOT.parent
 
 
 class StartupAndBuildTests(unittest.TestCase):
+    def test_source_run_ignores_stale_bundled_runtime(self):
+        with patch.object(sys, "frozen", False, create=True):
+            self.assertEqual(_runtime_dirs(), ())
+
     def test_bundled_runtime_tool_is_found(self):
         with tempfile.TemporaryDirectory() as directory:
             runtime = Path(directory)

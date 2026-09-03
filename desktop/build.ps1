@@ -52,4 +52,4 @@ if (Test-Path $runtimeDir) {
 Write-Host ''
 Write-Host 'BUILD CONCLUÍDO.' -ForegroundColor Green
 Write-Host "Executável: $distDir\OPUS-COPY.exe" -ForegroundColor Green
-Write-Host 'Observação: o PO Token Provider continua sendo usado da pasta do usuário (%USERPROFILE%\bgutil-ytdlp-pot-provider) e o Node.js continua sendo uma dependência externa.' -ForegroundColor Yellow
+Write-Host 'Observação: o Node.js continua sendo uma dependência externa para os desafios JavaScript do YouTube.' -ForegroundColor Yellow

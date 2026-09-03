@@ -89,21 +89,22 @@ class YouTubeDownloader:
             return ["--no-js-runtimes", "--js-runtimes", f"deno:{deno}"]
         return []
 
-    @staticmethod
-    def _pot_provider_home() -> Path | None:
-        configured = os.getenv("OPUS_COPY_POT_PROVIDER_HOME", "").strip()
-        root = Path(configured).expanduser() if configured else Path(os.getenv("USERPROFILE", "")) / "bgutil-ytdlp-pot-provider"
-        server = root / "server"
-        if (server / "package.json").is_file() and (server / "src").is_dir():
-            return server
-        return None
-
     def _base_args(self) -> list[str]:
-        args = [self.executable, "--ignore-config", "--no-playlist", "--newline", "--no-warnings", "--no-part"]
+        # External yt-dlp plugins are disabled deliberately.  The optional
+        # bgutil plugin probes every installed provider and can invoke Deno even
+        # when Node was explicitly selected, aborting otherwise valid public
+        # downloads.  yt-dlp's built-in YouTube extraction + EJS is the stable
+        # path used here and is isolated from machine-wide yt-dlp configuration.
+        args = [
+            self.executable,
+            "--ignore-config",
+            "--no-plugin-dirs",
+            "--no-playlist",
+            "--newline",
+            "--no-warnings",
+            "--no-part",
+        ]
         args.extend(self._js_runtime_args())
-        provider_home = self._pot_provider_home()
-        if provider_home:
-            args.extend(["--extractor-args", f"youtubepot-bgutilscript:server_home={provider_home}"])
         return args
 
     def _run(self, args: list[str], timeout: int = 6 * 60 * 60):
@@ -134,12 +135,10 @@ class YouTubeDownloader:
                 errors.append(f"YouTube bloqueou {purpose} com {label}.")
                 continue
             raise ToolError(f"Falha no {purpose} do YouTube.\n\n{combined or 'yt-dlp encerrou sem informar o erro.'}")
-        provider = self._pot_provider_home()
-        provider_text = f"PO Token Provider detectado em: {provider}" if provider else "PO Token Provider não encontrado. Execute .\\desktop\\setup.ps1."
         runtime = self._js_runtime_args()
         runtime_text = f"JS runtime ativo: {runtime[-1]}" if runtime else "Nenhum JS runtime compatível detectado (Deno >=2.3 ou Node >=22 recomendado pelo yt-dlp)."
         cookie_text = "Se o vídeo exigir login, configure OPUS_COPY_YOUTUBE_COOKIES_FILE apontando para um cookies.txt exportado do navegador." if not cookie_file else "O arquivo de cookies configurado também não pôde ser usado."
-        raise ToolError("Não foi possível concluir o " + purpose + " pelo YouTube.\n\n" + "\n".join(errors) + f"\n\n{provider_text}\n{runtime_text}\n{cookie_text}")
+        raise ToolError("Não foi possível concluir o " + purpose + " pelo YouTube.\n\n" + "\n".join(errors) + f"\n\n{runtime_text}\n{cookie_text}")
 
     def download_audio(self, url: str, output_dir: Path, output: Path | None = None) -> Path:
         clean_url = url.strip()

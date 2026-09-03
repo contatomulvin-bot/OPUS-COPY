@@ -88,6 +88,11 @@ if ($LASTEXITCODE -ne 0) { throw 'A atualização do pip falhou.' }
 & $venvPython -m pip install -r (Join-Path $PSScriptRoot 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'A instalação das dependências Python falhou.' }
 
+# Older releases installed bgutil globally in this venv.  Its script provider
+# may select Deno behind the application's back and abort valid downloads.
+& $venvPython -m pip uninstall --yes bgutil-ytdlp-pot-provider *> $null
+if ($LASTEXITCODE -ne 0) { throw 'Não foi possível remover o provider antigo do yt-dlp.' }
+
 & $venvPython -c "import PySide6, dotenv, google.genai, yt_dlp, yt_dlp_ejs, faster_whisper, cv2; print('Dependências Python OK')"
 if ($LASTEXITCODE -ne 0) { throw 'A validação das dependências Python falhou.' }
 
@@ -137,7 +142,7 @@ if (-not $ffmpeg -or -not $ffprobe) {
 }
 Write-Host 'FFmpeg e FFprobe encontrados.' -ForegroundColor Green
 
-# yt-dlp EJS benefits from Node 22+ and the optional PO Token server.
+# yt-dlp EJS uses Node 22+ for YouTube JavaScript challenges.
 $node = Get-Command node -ErrorAction SilentlyContinue
 $nodeMajor = 0
 if ($node) {
@@ -156,42 +161,6 @@ if (-not $node -or $nodeMajor -lt 22) {
   throw 'Node.js 22+ não foi encontrado após a instalação. Feche e abra o PowerShell e tente novamente.'
 }
 Write-Host "Node.js $nodeVersion OK." -ForegroundColor Green
-
-$git = Get-Command git -ErrorAction SilentlyContinue
-if (-not $git) {
-  Write-Warning 'Git não encontrado. O app abrirá normalmente, mas o PO Token Provider opcional não será instalado.'
-} else {
-  $potRoot = Join-Path $env:USERPROFILE 'bgutil-ytdlp-pot-provider'
-  $providerReady = $true
-  if (-not (Test-Path (Join-Path $potRoot '.git'))) {
-    Write-Host 'Baixando o PO Token Provider do YouTube...' -ForegroundColor Yellow
-    & $git.Source clone --depth 1 --branch 1.3.2 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git $potRoot
-    $providerReady = $LASTEXITCODE -eq 0
-  }
-
-  $potServer = Join-Path $potRoot 'server'
-  if ($providerReady -and (Test-Path (Join-Path $potServer 'package.json'))) {
-    Push-Location $potServer
-    try {
-      & npm ci
-      $providerReady = $LASTEXITCODE -eq 0
-      if ($providerReady) {
-        & npx tsc
-        $providerReady = $LASTEXITCODE -eq 0
-      }
-    } finally {
-      Pop-Location
-    }
-  } else {
-    $providerReady = $false
-  }
-
-  if ($providerReady) {
-    Write-Host 'PO Token Provider configurado.' -ForegroundColor Green
-  } else {
-    Write-Warning 'O PO Token Provider opcional não pôde ser configurado. O app abrirá; downloads restritos pelo YouTube podem exigir cookies.'
-  }
-}
 
 & $venvPython -m yt_dlp --ignore-config --version
 if ($LASTEXITCODE -ne 0) { throw 'Não foi possível executar o yt-dlp do ambiente desktop.' }

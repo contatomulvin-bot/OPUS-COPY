@@ -7,6 +7,16 @@ from opus_copy.downloader import YouTubeDownloader
 
 
 class DownloaderRuntimeTests(unittest.TestCase):
+    def test_base_args_isolate_yt_dlp_from_external_plugins(self):
+        downloader = YouTubeDownloader.__new__(YouTubeDownloader)
+        downloader.executable = "yt-dlp"
+        with patch.object(downloader, "_js_runtime_args", return_value=[]):
+            args = downloader._base_args()
+
+        self.assertIn("--ignore-config", args)
+        self.assertIn("--no-plugin-dirs", args)
+        self.assertNotIn("youtubepot-bgutilscript", " ".join(args))
+
     def test_node_replaces_default_deno_runtime(self):
         def which(name):
             return {"node": "C:/Program Files/nodejs/node.exe", "deno": "C:/WinGet/deno.exe"}.get(name)

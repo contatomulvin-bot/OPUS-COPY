@@ -18,6 +18,11 @@ def _bundle_dir() -> Path:
 
 def _runtime_dirs() -> tuple[Path, ...]:
     """Locations used by source runs and one-directory PyInstaller builds."""
+    # A source run must use the freshly configured virtual environment from
+    # PATH.  desktop/runtime may contain a launcher copied by an older build
+    # and silently bind the app to stale yt-dlp plugins or another Python.
+    if not getattr(sys, "frozen", False):
+        return ()
     bundle = _bundle_dir()
     executable_dir = Path(sys.executable).resolve().parent
     return bundle / "runtime", executable_dir / "runtime", bundle
