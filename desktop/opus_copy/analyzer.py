@@ -67,7 +67,6 @@ class ViralAnalyzer:
                 end = min(available_end, float(item["end"]))
                 if end <= start or end - start < 8:
                     continue
-                # Do not accept duplicates/near-duplicates when the refill pass is used.
                 if any(abs(start - c.start) < 4 and abs(end - c.end) < 8 for c in result):
                     continue
                 scores_raw = item.get("scores") if isinstance(item.get("scores"), dict) else {}
@@ -99,13 +98,37 @@ class ViralAnalyzer:
         except json.JSONDecodeError as exc:
             raise ToolError(f"Resposta da IA não é JSON válido: {exc}") from exc
 
-    def rank(self, transcript: dict, max_clips: int = 8) -> list[ClipCandidate]:
-        segments = transcript.get("segments", [])
+    @staticmethod
+    def _chunk_segments(segments: list[dict], max_duration: float = 600.0, max_segments: int = 150) -> list[list[dict]]:
+        """Split chronologically so Gemini cannot overlook the opening of long videos."""
         if not segments:
-            raise ToolError("A transcrição não contém segmentos.")
-        max_clips = max(1, min(int(max_clips), 20))
-        compact = [{"start": round(float(s["start"]), 2), "end": round(float(s["end"]), 2), "text": s["text"]} for s in segments if s.get("text")]
-        prompt = f"""Você é o editor-chefe de YouTube Shorts e estrategista de audiência.
+            return []
+        chunks: list[list[dict]] = []
+        start_index = 0
+        while start_index < len(segments):
+            chunk_start = float(segments[start_index]["start"])
+            end_index = start_index
+            while end_index < len(segments):
+                next_segment = segments[end_index]
+                if end_index > start_index and (
+                    float(next_segment["end"]) > chunk_start + max_duration
+                    or end_index - start_index >= max_segments
+                ):
+                    break
+                end_index += 1
+            if end_index == start_index:
+                end_index = start_index + 1
+            chunks.append(segments[start_index:end_index])
+            start_index = end_index
+        return chunks
+
+    @staticmethod
+    def _analysis_prompt(compact: list[dict], max_clips: int, opening: bool = False) -> str:
+        opening_rule = (
+            "ESTE É O BLOCO INICIAL DO VÍDEO. Você DEVE avaliá-lo com a mesma atenção dos demais blocos e procurar pelo menos um momento forte de abertura, introdução, promessa, conflito ou primeira revelação, quando houver material válido. Não pule este bloco.\n\n"
+            if opening else ""
+        )
+        return f"""Você é o editor-chefe de YouTube Shorts e estrategista de audiência.
 
 Encontre os momentos com maior potencial REAL de retenção, descoberta e compartilhamento. O objetivo é maximizar audiência sem inventar conteúdo.
 
@@ -113,34 +136,72 @@ PRIORIDADE: 30% gancho nos primeiros 3-5s; 20% retenção; 15% curiosidade/surpr
 
 REGRAS: o hook deve ser baseado no que é dito; não faça clickbait enganoso; prefira perguntas, revelações, contradições, opiniões fortes, histórias incomuns, erros, consequências, descobertas e números relevantes; o clipe deve funcionar sozinho; comece no início natural da ideia e termine depois da conclusão; nunca corte frase; prefira 20-75s.
 
-PALAVRAS-CHAVE: 3-8 termos/frases que alguém pesquisaria no YouTube, sem hashtags.
+{opening_rule}Retorne no máximo {max_clips} clips distintos deste bloco. Use somente os timestamps existentes na transcrição. Não invente falas.
 
-IMPORTANTE: RETORNE EXATAMENTE {max_clips} CLIPS DISTINTOS quando houver material suficiente na transcrição. Não retorne apenas os melhores 1 ou 2: preencha a quantidade solicitada com os próximos melhores momentos reais. Só retorne menos se a transcrição realmente não tiver {max_clips} momentos válidos e suficientemente distintos.
+PALAVRAS-CHAVE: 3-8 termos/frases que alguém pesquisaria no YouTube, sem hashtags.
 
 Retorne SOMENTE JSON válido:
 {{"clips":[{{"start":0,"end":30,"score":0,"title":"...","hook":"...","reason":"...","category":"EDUCATION","keywords":["..."],"scores":{{"hook":0,"retention":0,"curiosity":0,"emotion":0,"value":0,"shareability":0,"clarity":0}}}}]}}
 
 Categorias: STORY, OPINION, EDUCATION, MOTIVATION, HUMOR, CONTROVERSY, SURPRISE, EMOTION, FACT, ADVICE, OTHER.
 
-TRANSCRIÇÃO:
+TRANSCRIÇÃO DO BLOCO:
 {json.dumps(compact, ensure_ascii=False)}"""
-        result = self._parse_payload(self._extract_json(self._generate(prompt)), segments)
 
-        # Gemini can occasionally return fewer clips despite the exact-count instruction.
-        # A dedicated refill pass asks only for the missing slots instead of silently producing one clip.
-        if len(result) < max_clips:
-            missing = max_clips - len(result)
-            used = [{"start": round(c.start, 2), "end": round(c.end, 2)} for c in result]
-            refill_prompt = f"""Você é um editor de YouTube Shorts. A primeira análise encontrou {len(result)} clips, mas o usuário pediu {max_clips}. Encontre EXATAMENTE mais {missing} momentos DISTINTOS e válidos na transcrição abaixo, evitando estes intervalos já usados: {json.dumps(used)}.
+    def rank(self, transcript: dict, max_clips: int = 8) -> list[ClipCandidate]:
+        segments = transcript.get("segments", [])
+        if not segments:
+            raise ToolError("A transcrição não contém segmentos.")
+        max_clips = max(1, min(int(max_clips), 20))
+        compact = [
+            {"start": round(float(s["start"]), 2), "end": round(float(s["end"]), 2), "text": s["text"]}
+            for s in segments if s.get("text")
+        ]
+        if not compact:
+            raise ToolError("A transcrição não contém texto utilizável.")
 
-Escolha os próximos melhores momentos reais para retenção/audiência. Não invente fatos, não use clickbait enganoso, não corte frases e prefira 20-75 segundos. Retorne SOMENTE JSON no formato {{\"clips\":[{{\"start\":0,\"end\":30,\"score\":0,\"title\":\"...\",\"hook\":\"...\",\"reason\":\"...\",\"category\":\"OTHER\",\"keywords\":[\"...\"],\"scores\":{{\"hook\":0,\"retention\":0,\"curiosity\":0,\"emotion\":0,\"value\":0,\"shareability\":0,\"clarity\":0}}}}]}}.
+        # Long transcripts are analysed chronologically in independent windows.
+        # The first window is explicitly marked as the opening so the model cannot
+        # effectively ignore the beginning while focusing on later high-signal text.
+        chunks = self._chunk_segments(compact)
+        raw_candidates: list[ClipCandidate] = []
+        per_chunk = max(1, (max_clips + len(chunks) - 1) // len(chunks))
 
-TRANSCRIÇÃO:
-{json.dumps(compact, ensure_ascii=False)}"""
+        for index, chunk in enumerate(chunks):
+            # Give the opening block one extra slot so early moments have a fair chance.
+            chunk_limit = min(4, per_chunk + (1 if index == 0 and len(chunks) > 1 else 0))
+            prompt = self._analysis_prompt(chunk, chunk_limit, opening=index == 0)
             try:
-                refill = self._parse_payload(self._extract_json(self._generate(refill_prompt)), segments, result)
-                result = refill
+                parsed = self._extract_json(self._generate(prompt))
+                raw_candidates = self._parse_payload(parsed, chunk, raw_candidates)
             except ToolError:
-                pass
+                raise
+            except Exception as exc:
+                raise ToolError(f"Falha durante a análise do bloco {index + 1}/{len(chunks)}: {exc}") from exc
 
-        return sorted(result, key=lambda c: c.score, reverse=True)[:max_clips]
+        if not raw_candidates:
+            raise ToolError("A IA não encontrou clips válidos na transcrição.")
+
+        # Prefer global quality, but guarantee that a strong opening candidate is not
+        # discarded merely because later sections produced slightly higher scores.
+        opening_candidates = [c for c in raw_candidates if c.start <= compact[0]["start"] + 120]
+        ranked = sorted(raw_candidates, key=lambda c: c.score, reverse=True)
+        selected: list[ClipCandidate] = []
+        if opening_candidates and max_clips > 0:
+            selected.append(max(opening_candidates, key=lambda c: c.score))
+        for candidate in ranked:
+            if len(selected) >= max_clips:
+                break
+            if any(abs(candidate.start - c.start) < 4 and abs(candidate.end - c.end) < 8 for c in selected):
+                continue
+            selected.append(candidate)
+
+        # If an opening candidate was unavailable, fill purely by score.
+        for candidate in ranked:
+            if len(selected) >= max_clips:
+                break
+            if any(abs(candidate.start - c.start) < 4 and abs(candidate.end - c.end) < 8 for c in selected):
+                continue
+            selected.append(candidate)
+
+        return sorted(selected[:max_clips], key=lambda c: c.score, reverse=True)
