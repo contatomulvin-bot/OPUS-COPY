@@ -46,19 +46,12 @@ export class ClipAnalyzer {
       }
       this.client = new GoogleGenAI({
         apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
+        httpOptions: { headers: { 'User-Agent': 'opus-copy' } },
       });
     }
     return this.client;
   }
 
-  /**
-   * Analisa a transcrição completa de um vídeo e identifica os melhores cortes para Shorts
-   */
   async analyzeTranscript(
     segments: SegmentReference[],
     options: AnalyzeTranscriptOptions = {}
@@ -71,10 +64,12 @@ export class ClipAnalyzer {
     const maxCandidates = options.maxCandidates ?? 10;
     const minClipDuration = options.minClipDuration ?? 20;
     const maxClipDuration = options.maxClipDuration ?? 90;
-    const videoDuration =
-      options.videoDuration ?? segments[segments.length - 1].endTime;
+    const videoDuration = options.videoDuration ?? segments[segments.length - 1].endTime;
 
-    // Dividir transcrição em chunks se o vídeo for longo
+    // Configurable without breaking the existing API/UI. Set OPUS_CONTENT_PROFILE
+    // to viral, education, storytelling, humor, marketing or podcast.
+    const profile = process.env.OPUS_CONTENT_PROFILE || 'viral';
+    const scorer = this.scorer.forProfile(profile);
     const chunks = this.chunker.chunkTranscript(segments);
     const rawCandidates: ClipCandidate[] = [];
 
@@ -104,44 +99,22 @@ export class ClipAnalyzer {
                   items: {
                     type: Type.OBJECT,
                     properties: {
-                      startTime: {
-                        type: Type.NUMBER,
-                        description: 'Timestamp inicial do corte em segundos (float)',
-                      },
-                      endTime: {
-                        type: Type.NUMBER,
-                        description: 'Timestamp final do corte em segundos (float > startTime)',
-                      },
-                      title: {
-                        type: Type.STRING,
-                        description: 'Título curto e chamativo para o Short',
-                      },
-                      hook: {
-                        type: Type.STRING,
-                        description: 'Frase de gancho que prende a atenção nos primeiros 3 segundos',
-                      },
-                      description: {
-                        type: Type.STRING,
-                        description: 'Breve explicação do porquê esse trecho funciona isoladamente',
-                      },
-                      category: {
-                        type: Type.STRING,
-                        enum: CLIP_CATEGORIES as unknown as string[],
-                        description: 'Categoria temática do corte',
-                      },
-                      score: {
-                        type: Type.INTEGER,
-                        description: 'AI Score de potencial de engajamento (0 a 100)',
-                      },
+                      startTime: { type: Type.NUMBER, description: 'Timestamp inicial em segundos' },
+                      endTime: { type: Type.NUMBER, description: 'Timestamp final em segundos' },
+                      title: { type: Type.STRING, description: 'Título curto e chamativo' },
+                      hook: { type: Type.STRING, description: 'Gancho real do conteúdo' },
+                      description: { type: Type.STRING, description: 'Por que o trecho funciona isoladamente' },
+                      category: { type: Type.STRING, enum: CLIP_CATEGORIES as unknown as string[] },
+                      score: { type: Type.INTEGER, description: 'Score estimado de 0 a 100' },
                       scores: {
                         type: Type.OBJECT,
                         properties: {
-                          hook: { type: Type.INTEGER, description: 'Potencial de gancho (0 a 100)' },
-                          clarity: { type: Type.INTEGER, description: 'Clareza contextual (0 a 100)' },
-                          emotion: { type: Type.INTEGER, description: 'Carga emocional/humor (0 a 100)' },
-                          curiosity: { type: Type.INTEGER, description: 'Nível de curiosidade gerado (0 a 100)' },
-                          standaloneContext: { type: Type.INTEGER, description: 'Independência da narrativa (0 a 100)' },
-                          value: { type: Type.INTEGER, description: 'Valor prático ou entretenimento (0 a 100)' },
+                          hook: { type: Type.INTEGER, description: 'Gancho 0-100' },
+                          clarity: { type: Type.INTEGER, description: 'Clareza 0-100' },
+                          emotion: { type: Type.INTEGER, description: 'Emoção/humor 0-100' },
+                          curiosity: { type: Type.INTEGER, description: 'Curiosidade 0-100' },
+                          standaloneContext: { type: Type.INTEGER, description: 'Contexto independente 0-100' },
+                          value: { type: Type.INTEGER, description: 'Valor/entretenimento 0-100' },
                         },
                         required: ['hook', 'clarity', 'emotion', 'curiosity', 'standaloneContext', 'value'],
                       },
@@ -159,25 +132,21 @@ export class ClipAnalyzer {
         let parsedJson: any;
         try {
           parsedJson = JSON.parse(rawText);
-        } catch (jsonErr: any) {
-          console.error('Falha ao decodificar JSON do Gemini:', jsonErr);
-          throw new Error(`INVALID_AI_RESPONSE: Resposta do modelo não pôde ser interpretada como JSON.`);
+        } catch {
+          throw new Error('INVALID_AI_RESPONSE: Resposta do modelo não pôde ser interpretada como JSON.');
         }
 
-        // Validação Zod estrita
         const validated = ClipAnalysisResponseSchema.safeParse(parsedJson);
-        if (!validated.success) {
-          console.warn('Clip analysis schema validation warning:', validated.error.format());
-        }
-
         const candidateList = (validated.success ? validated.data.clips : (parsedJson.clips || [])) as ClipCandidate[];
 
         for (const rawCandidate of candidateList) {
-          // 1. Sanitizar sub-scores e calcular score determinístico
-          const sanitizedScores = this.scorer.sanitizeSubScores(rawCandidate.scores || {});
-          const calculatedScore = this.scorer.calculateScore(sanitizedScores);
+          const sanitizedScores = scorer.sanitizeSubScores(rawCandidate.scores || {});
 
-          // 2. Ajuste e ancoragem em segmentos reais (Anti-alucinação)
+          // Quality gate before ranking: a clip cannot become "viral" while
+          // lacking a usable hook, clarity or standalone context.
+          if (!scorer.passesQualityGate(sanitizedScores)) continue;
+
+          const calculatedScore = scorer.calculateScore(sanitizedScores);
           const adjusted = this.timestampAdjuster.adjustCandidate(
             {
               startTime: rawCandidate.startTime,
@@ -186,24 +155,11 @@ export class ClipAnalyzer {
               hook: rawCandidate.hook,
             },
             segments,
-            {
-              maxVideoDuration: videoDuration,
-              minDurationSeconds: 15,
-              maxDurationSeconds: 120,
-            }
+            { maxVideoDuration: videoDuration, minDurationSeconds: 15, maxDurationSeconds: 120 }
           );
 
-          if (!adjusted) {
-            // Rejeita candidato que não pôde ser ancorado na fala real
-            continue;
-          }
+          if (!adjusted || !adjusted.matchedText || adjusted.matchedText.trim().length < 10) continue;
 
-          // Verificar se a fala correspondente não está vazia (Anti-alucinação)
-          if (!adjusted.matchedText || adjusted.matchedText.trim().length < 10) {
-            continue;
-          }
-
-          // Sanitizar categoria
           const safeCategory: ClipCategory = CLIP_CATEGORIES.includes(rawCandidate.category)
             ? rawCandidate.category
             : 'OTHER';
@@ -222,9 +178,7 @@ export class ClipAnalyzer {
         }
       } catch (err: any) {
         console.error(`Erro ao analisar transcrição no chunk ${chunk.chunkIndex}:`, err);
-        if (err.message?.startsWith('ANALYSIS_') || err.message?.startsWith('INVALID_') || err.message?.startsWith('TRANSCRIPT_')) {
-          throw err;
-        }
+        if (err.message?.startsWith('ANALYSIS_') || err.message?.startsWith('INVALID_') || err.message?.startsWith('TRANSCRIPT_')) throw err;
         throw new Error(`ANALYSIS_FAILED: ${err.message || 'Falha na análise semântica do vídeo com IA.'}`);
       }
     }
@@ -233,13 +187,10 @@ export class ClipAnalyzer {
       throw new Error('NO_CLIPS_FOUND: Nenhum momento com potencial de corte autônomo foi identificado na transcrição.');
     }
 
-    // Deduplicação inteligente e ranking final
-    const deduplicated = this.deduplicator.deduplicate(rawCandidates, {
+    return this.deduplicator.deduplicate(rawCandidates, {
       maxCandidates,
       maxTemporalOverlapRatio: 0.65,
     });
-
-    return deduplicated;
   }
 }
 
