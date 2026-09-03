@@ -8,11 +8,11 @@ from .tools import ToolError
 
 
 class WhisperXTranscriber:
-    """Fast local Whisper transcription.
+    """Fast local Whisper transcription powered by faster-whisper.
 
-    Kept under the historical class name so the desktop pipeline remains compatible.
-    Unlike WhisperX, this does not run a second wav2vec2 alignment pass: faster-whisper
-    already exposes word timestamps, which removes a major source of latency.
+    The historical class name is kept for compatibility with the desktop pipeline.
+    The actual engine is faster-whisper/CTranslate2, including native AMD ROCm
+    acceleration when the ROCm CTranslate2 wheel is installed.
     """
 
     def __init__(self) -> None:
@@ -25,14 +25,27 @@ class WhisperXTranscriber:
         self._model_key: tuple[str, str, str, int, int] | None = None
 
     @staticmethod
-    def _device_settings() -> tuple[str, str]:
+    def _cuda_available() -> bool:
+        """Ask CTranslate2 directly instead of relying on torch CUDA detection.
+
+        This works for both NVIDIA CUDA builds and AMD ROCm builds, where the
+        CTranslate2 runtime still exposes the GPU backend as `cuda`.
+        """
+        try:
+            import ctranslate2  # type: ignore
+
+            get_count = getattr(ctranslate2, "get_cuda_device_count", None)
+            if callable(get_count):
+                return int(get_count()) > 0
+        except Exception:
+            return False
+        return False
+
+    @classmethod
+    def _device_settings(cls) -> tuple[str, str]:
         requested = os.getenv("WHISPER_DEVICE", os.getenv("WHISPERX_DEVICE", "auto")).strip().lower()
         if requested == "auto":
-            try:
-                import torch  # type: ignore
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-            except Exception:
-                device = "cpu"
+            device = "cuda" if cls._cuda_available() else "cpu"
         else:
             device = requested
 
@@ -60,17 +73,27 @@ class WhisperXTranscriber:
         cpu_threads, num_workers = self._thread_settings()
         key = (model_name, device, compute_type, cpu_threads, num_workers)
         if self._model is None or self._model_key != key:
-            # IMPORTANT: explicitly pass cpu_threads=0 when no value is configured.
-            # Some faster-whisper versions default cpu_threads to None and then pass
-            # that None into ctranslate2 as intra_threads=None, which current
-            # ctranslate2 rejects. Zero means automatic/default threading.
             kwargs = {
                 "device": device,
                 "compute_type": compute_type,
                 "cpu_threads": cpu_threads,
                 "num_workers": num_workers,
             }
-            self._model = self.WhisperModel(model_name, **kwargs)
+            try:
+                self._model = self.WhisperModel(model_name, **kwargs)
+            except Exception as exc:
+                if device == "cuda" and os.getenv("WHISPER_GPU_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "on"}:
+                    fallback_compute = os.getenv("WHISPER_CPU_COMPUTE_TYPE", "int8").strip() or "int8"
+                    self._model = self.WhisperModel(
+                        model_name,
+                        device="cpu",
+                        compute_type=fallback_compute,
+                        cpu_threads=cpu_threads,
+                        num_workers=num_workers,
+                    )
+                    self._model_key = (model_name, "cpu", fallback_compute, cpu_threads, num_workers)
+                    return self._model, "cpu", fallback_compute
+                raise ToolError(f"Falha ao iniciar faster-whisper na GPU ({device}/{compute_type}): {exc}") from exc
             self._model_key = key
         return self._model, device, compute_type
 
@@ -138,7 +161,7 @@ class WhisperXTranscriber:
         except ToolError:
             raise
         except Exception as exc:
-            raise ToolError(f"Falha na transcrição local ({device}/{compute_type}): {exc}") from exc
+            raise ToolError(f"Falha na transcrição local com faster-whisper ({device}/{compute_type}): {exc}") from exc
 
 
 def save_transcript(data: dict, path: Path) -> None:
