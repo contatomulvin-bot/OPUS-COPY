@@ -10,6 +10,13 @@ import { serializePrisma } from '../utils/serializer';
 
 export interface IngestionOptions {
   autoExtractAudio?: boolean;
+  /** Nome informado pelo usuário para identificar o vídeo. */
+  displayName?: string;
+}
+
+function normalizeDisplayName(name?: string): string | undefined {
+  const value = name?.trim();
+  return value ? value.slice(0, 200) : undefined;
 }
 
 export class VideoIngestionService {
@@ -41,17 +48,18 @@ export class VideoIngestionService {
       throw new Error('Projeto não encontrado para vincular o vídeo.');
     }
 
-    // 1. Validar o arquivo antes de criar o registro
     const validation = this.uploadProvider.validate(file);
     if (!validation.valid) {
       throw new Error(validation.error || 'INVALID_VIDEO: Arquivo de vídeo inválido.');
     }
 
-    // 2. Criar registro inicial no banco com status CREATED
+    const displayName = normalizeDisplayName(options.displayName);
+
     const video = await prisma.video.create({
       data: {
         projectId,
-        originalName: file.originalName || 'video_upload.mp4',
+        // User-provided name always wins over the source filename.
+        originalName: displayName || file.originalName || 'video_upload.mp4',
         sourceType: 'UPLOAD',
         storagePath: 'pending',
         status: 'CREATED',
@@ -61,7 +69,6 @@ export class VideoIngestionService {
     });
 
     try {
-      // 3. Salvar o arquivo no storage com nome e caminho seguros
       await prisma.video.update({
         where: { id: video.id },
         data: {
@@ -84,7 +91,6 @@ export class VideoIngestionService {
         },
       });
 
-      // 4. Obter metadados reais com ffprobe
       const metadata = await this.videoProcessor.getMetadata(stored.absolutePath);
 
       await prisma.video.update({
@@ -98,7 +104,6 @@ export class VideoIngestionService {
         },
       });
 
-      // 5. Extração real de áudio com ffmpeg
       if (options.autoExtractAudio) {
         await this.extractAudio(video.id);
       } else {
@@ -116,7 +121,7 @@ export class VideoIngestionService {
       return serializePrisma(updated);
     } catch (err: any) {
       console.error(`Falha na ingestão do vídeo ${video.id}:`, err);
-      const updated = await prisma.video.update({
+      await prisma.video.update({
         where: { id: video.id },
         data: {
           status: 'FAILED',
@@ -145,13 +150,38 @@ export class VideoIngestionService {
       throw new Error('Projeto não encontrado para vincular o vídeo.');
     }
 
-    // 1. Criar registro inicial no banco
+    const cleanUrl = url.trim();
+    const displayName = normalizeDisplayName(options.displayName);
+
+    // Idempotency: the same URL inside the same project must not create a
+    // second source/video. A retry may update the user's display name.
+    const existing = await prisma.video.findFirst({
+      where: {
+        projectId,
+        sourceType: 'YOUTUBE',
+        sourceUrl: cleanUrl,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (existing) {
+      if (displayName && existing.originalName !== displayName) {
+        const renamed = await prisma.video.update({
+          where: { id: existing.id },
+          data: { originalName: displayName },
+        });
+        return serializePrisma(renamed);
+      }
+      return serializePrisma(existing);
+    }
+
     const video = await prisma.video.create({
       data: {
         projectId,
-        originalName: 'Vídeo do YouTube',
+        // User-provided name is authoritative; YouTube title is fallback only.
+        originalName: displayName || 'Vídeo do YouTube',
         sourceType: 'YOUTUBE',
-        sourceUrl: url.trim(),
+        sourceUrl: cleanUrl,
         storagePath: 'pending',
         status: 'DOWNLOADING',
         progress: 15,
@@ -160,13 +190,13 @@ export class VideoIngestionService {
     });
 
     try {
-      // 2. Baixar vídeo real com yt-dlp
-      const downloadResult = await this.youtubeProvider.download(url, video.id);
+      const downloadResult = await this.youtubeProvider.download(cleanUrl, video.id);
 
       await prisma.video.update({
         where: { id: video.id },
         data: {
-          originalName: downloadResult.info.title || 'Vídeo do YouTube',
+          // Never replace a custom name with the YouTube title.
+          originalName: displayName || downloadResult.info.title || 'Vídeo do YouTube',
           storagePath: downloadResult.storagePath,
           fileSize: BigInt(downloadResult.fileSize),
           status: 'DOWNLOADED',
@@ -175,15 +205,14 @@ export class VideoIngestionService {
         },
       });
 
-      // Atualizar nome do projeto se estiver com nome padrão
-      if (project.name === 'Novo Projeto' || project.name.startsWith('Projeto ')) {
+      // Only auto-name a default project when the user did not provide a name.
+      if (!displayName && (project.name === 'Novo Projeto' || project.name.startsWith('Projeto '))) {
         await prisma.project.update({
           where: { id: projectId },
           data: { name: downloadResult.info.title },
         });
       }
 
-      // 3. Obter metadados reais com ffprobe
       const metadata = await this.videoProcessor.getMetadata(downloadResult.absolutePath);
 
       await prisma.video.update({
@@ -197,7 +226,6 @@ export class VideoIngestionService {
         },
       });
 
-      // 4. Extrair áudio real com ffmpeg
       if (options.autoExtractAudio) {
         await this.extractAudio(video.id);
       }
@@ -249,7 +277,6 @@ export class VideoIngestionService {
       const audioKey = `audio/${videoId}.wav`;
       const audioAbsolutePath = this.storage.getAbsolutePath(audioKey);
 
-      // Usar o processador de vídeo para extração em WAV/PCM mono 16kHz
       await this.videoProcessor.extractAudio(videoAbsolutePath, audioAbsolutePath);
 
       const updated = await prisma.video.update({
