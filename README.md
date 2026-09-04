@@ -150,8 +150,11 @@ Isso impede que a interface escolha aleatoriamente um vídeo anterior quando uma
                      │
           ┌──────────┴──────────┐
           │                     │
-       Reframe              Subtitles
+   Face Detection          Subtitles
           │                     │
+   Face Tracking                │
+          │                     │
+   Smooth Reframe 9:16          │
           └──────────┬──────────┘
                      ▼
                   FFmpeg
@@ -279,7 +282,7 @@ Os testes automatizados cobrem especialmente o ranking determinístico e o quali
 
 ### Próxima camada
 
-- [ ] Reenquadramento com tracking de rosto/sujeito em vez de somente crop heurístico
+- [x] Reenquadramento dinâmico com detecção, tracking e trajetória suavizada do rosto
 - [ ] HotPeak temporal multimodal
 - [ ] Análise de frames para pessoas, gameplay e telas
 - [ ] Edição em massa de legendas/reframe/Brand Kit

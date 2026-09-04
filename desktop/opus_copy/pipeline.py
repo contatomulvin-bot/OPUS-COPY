@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .analyzer import ViralAnalyzer
+from .autoframe import REFRAME_VERSION
 from .downloader import YouTubeDownloader
 from .renderer import ClipRenderer, SubtitleStyle
 from .statistics import clip_statistics
@@ -146,7 +147,9 @@ class Pipeline:
             outputs: list[Path] = [Path() for _ in clips]
             render_workers = max(1, min(int(os.getenv("OPUS_COPY_RENDER_WORKERS", "2")), len(clips)))
             style = subtitle_style or SubtitleStyle()
-            style_key = hashlib.sha256(repr(style).encode("utf-8")).hexdigest()[:8]
+            # Reframe version is part of the cache key so old center-cropped outputs
+            # are never mistaken for clips rendered with face tracking.
+            style_key = hashlib.sha256(f"{style!r}|{REFRAME_VERSION}".encode("utf-8")).hexdigest()[:8]
 
             def render_one(index: int, clip, source: Path) -> tuple[int, Path]:
                 key = self._clip_cache_key(url, clip, language)

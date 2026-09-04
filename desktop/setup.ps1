@@ -16,7 +16,7 @@ $venvPython = Join-Path (Get-Location) 'desktop\.venv\Scripts\python.exe'
 & $venvPython -m pip install -r desktop\requirements.txt
 if ($LASTEXITCODE -ne 0) { throw 'A instalação das dependências Python falhou.' }
 
-& $venvPython -c "import PySide6, yt_dlp, yt_dlp_ejs, faster_whisper; print('Desktop dependencies OK')"
+& $venvPython -c "import PySide6, yt_dlp, yt_dlp_ejs, faster_whisper, cv2; print('Desktop dependencies + face tracking OK:', cv2.__version__)"
 if ($LASTEXITCODE -ne 0) { throw 'A validação das dependências falhou.' }
 
 # faster-whisper uses CTranslate2. On AMD RDNA2/RDNA3/RDNA4 under Windows,

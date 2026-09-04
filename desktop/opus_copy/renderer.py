@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .analyzer import ClipCandidate
-from .autoframe import find_subject_crop_x
+from .autoframe import build_reframe_plan
 from .tools import ToolError, require_executable, run_process
 
 
@@ -100,17 +100,19 @@ class ClipRenderer:
     def _render(self, source: Path, clip: ClipCandidate, transcript: dict, output: Path, source_offset: float) -> Path:
         if not source.exists() or source.stat().st_size == 0: raise ToolError(f"Arquivo de entrada inválido: {source}")
         output.parent.mkdir(parents=True, exist_ok=True); ass = output.with_suffix(".ass"); write_ass(transcript, clip, ass, self.subtitle_style)
+        duration = max(0.1, clip.end - clip.start)
         try:
-            crop_x, crop_width, framing_mode = find_subject_crop_x(source) if self.auto_reframe else (0, 0, "center")
+            plan = build_reframe_plan(
+                source,
+                start_seconds=source_offset,
+                duration=duration,
+            ) if self.auto_reframe else None
+            vf_crop = plan.ffmpeg_crop_filter() if plan else "crop=ih*9/16:ih:(iw-ih*9/16)/2:0"
         except Exception:
-            crop_x, crop_width, framing_mode = 0, 0, "center"
-        if crop_width > 0:
-            vf_crop = f"crop={crop_width}:ih:{crop_x}:0"
-        else:
+            # A detector failure must not lose the clip: FFmpeg can always center-crop.
             vf_crop = "crop=ih*9/16:ih:(iw-ih*9/16)/2:0"
         subtitle_filter = f"subtitles='{_escape_subtitle_path(ass)}'"
         vf = f"{vf_crop},scale=1080:1920:flags=fast_bilinear,{subtitle_filter}"
-        duration = max(0.1, clip.end - clip.start)
         args = [self.ffmpeg, "-y", "-ss", f"{source_offset:.3f}", "-i", str(source), "-t", f"{duration:.3f}", "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(output)]
         result = run_process(args, timeout=max(600, int(duration * 15)))
         if result.returncode != 0: raise ToolError(f"FFmpeg falhou ao renderizar o clip:\n{result.stderr.strip()}")
