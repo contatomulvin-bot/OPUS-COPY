@@ -23,33 +23,41 @@ if ($LASTEXITCODE -ne 0) { throw 'A validação das dependências falhou.' }
 # install the ROCm runtime + the matching CTranslate2 ROCm wheel so the
 # Whisper engine can run on the Radeon GPU instead of silently falling back to CPU.
 $gpuNames = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
-$amdGpu = ($gpuNames -join ' ') -match 'AMD|Radeon'
+$amdGpuText = $gpuNames -join ' '
+$amdGpu = $amdGpuText -match 'AMD|Radeon'
+$amdRocmCandidate = $amdGpu -and $amdGpuText -match 'RX\s*(7[0-9]{3}|9[0-9]{3})'
 
-if ($amdGpu) {
+if ($amdRocmCandidate) {
   Write-Host 'AMD Radeon detectada. Configurando faster-whisper + ROCm para GPU...' -ForegroundColor Yellow
 
   & $venvPython -m pip install --no-cache-dir `
     'https://repo.radeon.com/rocm/windows/rocm-rel-7.2/rocm_sdk_core-7.2.0.dev0-py3-none-win_amd64.whl' `
     'https://repo.radeon.com/rocm/windows/rocm-rel-7.2/rocm_sdk_libraries_custom-7.2.0.dev0-py3-none-win_amd64.whl' `
     'https://repo.radeon.com/rocm/windows/rocm-rel-7.2/rocm-7.2.0.dev0.tar.gz'
-  if ($LASTEXITCODE -ne 0) {
-    throw 'Não foi possível instalar o runtime ROCm 7.2. Verifique o driver AMD Adrenalin 26.1.1+ e execute o setup novamente.'
+  $rocmReady = $LASTEXITCODE -eq 0
+
+  if ($rocmReady) {
+    # The official ROCm Windows CTranslate2 wheel is shipped inside the release
+    # archive. This direct wheel mirror exposes the exact Python 3.11 wheel.
+    $rocmCt2 = 'https://github.com/PinW/ctranslate2-rocm-wheels/releases/download/v4.7.1-rocm72/ctranslate2-4.7.1-cp311-cp311-win_amd64.whl'
+    & $venvPython -m pip install --no-cache-dir $rocmCt2 --force-reinstall --no-deps
+    $rocmReady = $LASTEXITCODE -eq 0
   }
 
-  # The official ROCm Windows CTranslate2 wheel is shipped inside the release
-  # archive. This direct wheel mirror exposes the exact Python 3.11 wheel.
-  $rocmCt2 = 'https://github.com/PinW/ctranslate2-rocm-wheels/releases/download/v4.7.1-rocm72/ctranslate2-4.7.1-cp311-cp311-win_amd64.whl'
-  & $venvPython -m pip install --no-cache-dir $rocmCt2 --force-reinstall --no-deps
-  if ($LASTEXITCODE -ne 0) {
-    throw 'Não foi possível instalar o CTranslate2 ROCm para faster-whisper.'
+  if ($rocmReady) {
+    & $venvPython -c "import ctranslate2; print('CTranslate2', ctranslate2.__version__); print('GPU devices:', ctranslate2.get_cuda_device_count()); raise SystemExit(0 if ctranslate2.get_cuda_device_count() > 0 else 1)"
+    $rocmReady = $LASTEXITCODE -eq 0
   }
 
-  & $venvPython -c "import ctranslate2; print('CTranslate2', ctranslate2.__version__); print('GPU devices:', ctranslate2.get_cuda_device_count())"
-  if ($LASTEXITCODE -ne 0) {
-    throw 'CTranslate2 ROCm foi instalado, mas a GPU não pôde ser detectada. Verifique o driver AMD/ROCm.'
+  if (-not $rocmReady) {
+    Write-Warning 'A aceleração AMD/ROCm não ficou disponível. Restaurando o modo CPU para que o aplicativo continue funcionando.'
+    & $venvPython -m pip install 'ctranslate2>=4.4,<5' --force-reinstall
+    if ($LASTEXITCODE -ne 0) {
+      throw 'Não foi possível preparar nem o backend AMD nem o fallback em CPU.'
+    }
   }
 } else {
-  Write-Host 'GPU AMD não detectada. Mantendo faster-whisper em CPU/int8.' -ForegroundColor DarkYellow
+  Write-Host 'GPU AMD RDNA3 compatível não detectada. Mantendo faster-whisper em CPU/int8.' -ForegroundColor DarkYellow
 }
 
 # YouTube PO Token provider + supported JS runtime.

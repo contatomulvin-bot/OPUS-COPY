@@ -231,6 +231,20 @@ Nunca publique sua API key no GitHub.
 
 ### Desktop Windows
 
+Para usuários finais, baixe o instalador automático:
+
+**[Baixar OPUS-COPY-Setup.exe](https://github.com/contatomulvin-bot/OPUS-COPY/releases/download/installer-latest/OPUS-COPY-Setup.exe)**
+
+O instalador verifica e baixa Git, Python 3.11, Node.js e FFmpeg, prepara a IA, solicita a chave Gemini, cria atalhos e adiciona o desinstalador do Windows. Os clips ficam salvos separadamente em `%LOCALAPPDATA%\OPUS-COPY\data`, portanto não são apagados ao desinstalar o programa.
+
+Também existe a instalação direta pelo PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/contatomulvin-bot/OPUS-COPY/main/install.ps1 | iex
+```
+
+Para desenvolvimento manual:
+
 ```powershell
 .\desktop\setup.ps1
 .\desktop\run.ps1

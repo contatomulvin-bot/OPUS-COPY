@@ -22,6 +22,11 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT.parent / ".env")
 
+_configured_data_dir = os.getenv("OPUS_COPY_DATA_DIR", "").strip()
+WORKSPACE_ROOT = Path(_configured_data_dir).expanduser() if _configured_data_dir else ROOT / "workspace"
+if not WORKSPACE_ROOT.is_absolute():
+    WORKSPACE_ROOT = (ROOT.parent / WORKSPACE_ROOT).resolve()
+
 from opus_copy.pipeline import Pipeline  # noqa: E402
 from opus_copy.renderer import SubtitleStyle  # noqa: E402
 from opus_copy.tools import ToolError, probe_tool  # noqa: E402
@@ -69,7 +74,7 @@ class Worker(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            outputs = Pipeline(ROOT / "workspace").run(self.url, self.max_clips, self.progress.emit, output_dir=self.output_dir, subtitle_style=self.subtitle_style, language=self.language)
+            outputs = Pipeline(WORKSPACE_ROOT).run(self.url, self.max_clips, self.progress.emit, output_dir=self.output_dir, subtitle_style=self.subtitle_style, language=self.language)
             self.finished.emit([str(p) for p in outputs])
         except Exception as exc:
             self.failed.emit(f"{exc}\n\n{traceback.format_exc()}")
@@ -111,7 +116,7 @@ class VideoCard(QFrame):
 
 class MainWindow(QMainWindow):
     def __init__(self)->None:
-        super().__init__(); self.setWindowTitle("OPUS-COPY"); self.setMinimumSize(1100,780); self.resize(1240,860); self.setStyleSheet(APP_STYLE); self.setWindowIcon(QIcon(str(ROOT/"assets"/"opus-copy-logo.svg"))); self.thread=None; self.worker=None; self.output_dir=ROOT/"workspace"/"clips"; self.output_dir.mkdir(parents=True,exist_ok=True); self.video_cards=[]; self.started_at=0.0
+        super().__init__(); self.setWindowTitle("OPUS-COPY"); self.setMinimumSize(1100,780); self.resize(1240,860); self.setStyleSheet(APP_STYLE); self.setWindowIcon(QIcon(str(ROOT/"assets"/"opus-copy-logo.svg"))); self.thread=None; self.worker=None; self.output_dir=WORKSPACE_ROOT/"clips"; self.output_dir.mkdir(parents=True,exist_ok=True); self.video_cards=[]; self.started_at=0.0
         root=QWidget(); root_layout=QVBoxLayout(root); root_layout.setContentsMargins(20,18,20,18); root_layout.setSpacing(11)
         header=QHBoxLayout(); header.setSpacing(10); logo=QLabel(); logo.setFixedSize(46,46); logo.setPixmap(QIcon(str(ROOT/"assets"/"opus-copy-logo.svg")).pixmap(42,42)); header.addWidget(logo); brand_col=QVBoxLayout(); brand_col.setSpacing(1); brand=QLabel("OPUS-COPY"); brand.setObjectName("brand"); eyebrow=QLabel("AI VIDEO CLIPPER"); eyebrow.setObjectName("eyebrow"); brand_col.addWidget(brand); brand_col.addWidget(eyebrow); header.addLayout(brand_col); header.addStretch(1); engine=QLabel("WHISPERX  •  GEMINI  •  FFMPEG"); engine.setObjectName("muted"); header.addWidget(engine,0,Qt.AlignTop); root_layout.addLayout(header)
         self.tabs=QTabWidget(); self.tabs.setDocumentMode(True); self.tabs.addTab(self.build_creation_tab(),"CRIAÇÃO"); self.tabs.addTab(self.build_videos_tab(),"VÍDEOS JÁ CRIADOS"); root_layout.addWidget(self.tabs,1)

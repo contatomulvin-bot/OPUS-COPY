@@ -17,7 +17,7 @@ import apple_ui  # noqa: E402
 
 
 def _metadata_for(filename: str) -> dict | None:
-    analysis_dir = ROOT / "workspace" / "analysis"
+    analysis_dir = app_main.WORKSPACE_ROOT / "analysis"
     try:
         current_run = json.loads((analysis_dir / "current_run.json").read_text(encoding="utf-8"))
         if current_run.get("status") != "completed":
@@ -219,7 +219,7 @@ class ResponsiveMainWindow(app_main.MainWindow):
                 widget.deleteLater()
         self.video_cards.clear()
 
-        manifest_path = ROOT / "workspace" / "analysis" / "current_run.json"
+        manifest_path = app_main.WORKSPACE_ROOT / "analysis" / "current_run.json"
         current_outputs: list[str] = []
         manifest_status = "missing"
         try:
