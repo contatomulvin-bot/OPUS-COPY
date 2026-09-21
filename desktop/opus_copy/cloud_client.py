@@ -315,12 +315,23 @@ class MistcutCloudClient:
     def _pending_path(self) -> Path:
         return self.data_dir / "pending_settlements.json"
 
-    def queue_settlement(self, reservation_id: str, action: str) -> None:
+    def queue_settlement(
+        self,
+        reservation_id: str,
+        action: str,
+        actual_quantity: int | None = None,
+    ) -> None:
         if action not in {"commit", "refund"}:
             raise ValueError("Invalid settlement action")
         pending = self._read_pending()
         if not any(item.get("reservationId") == reservation_id for item in pending):
-            pending.append({"reservationId": reservation_id, "action": action})
+            item: dict[str, Any] = {
+                "reservationId": reservation_id,
+                "action": action,
+            }
+            if actual_quantity is not None:
+                item["actualQuantity"] = int(actual_quantity)
+            pending.append(item)
         self._pending_path.write_text(json.dumps(pending, indent=2), encoding="utf-8")
 
     def _read_pending(self) -> list[dict[str, str]]:
@@ -342,7 +353,11 @@ class MistcutCloudClient:
                 continue
             try:
                 if action == "commit":
-                    self.commit(reservation_id)
+                    actual_quantity = item.get("actualQuantity")
+                    self.commit(
+                        reservation_id,
+                        int(actual_quantity) if actual_quantity is not None else None,
+                    )
                 elif action == "refund":
                     self.refund(reservation_id, "Reembolso pendente reconciliado pelo aplicativo")
             except CloudError:
