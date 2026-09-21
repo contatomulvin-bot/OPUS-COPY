@@ -1,0 +1,181 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  SUPPORT
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum ReservationStatus {
+  RESERVED
+  COMMITTED
+  REFUNDED
+}
+
+enum CreditTransactionKind {
+  PLAN_GRANT
+  EXTRA_PURCHASE
+  RESERVATION
+  REFUND
+  ADMIN_ADJUSTMENT
+}
+
+model User {
+  id                 String              @id @default(uuid())
+  email              String              @unique
+  passwordHash       String
+  displayName        String?
+  role               UserRole            @default(USER)
+  stripeCustomerId   String?             @unique
+  disabledAt         DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  wallet             CreditWallet?
+  devices            Device[]
+  sessions           Session[]
+  reservations       CreditReservation[] @relation("ReservationUser")
+  creditTransactions CreditTransaction[] @relation("CreditTransactionUser")
+  subscriptions      Subscription[]
+  adminActions       AdminAuditLog[]      @relation("AdminActor")
+}
+
+model Device {
+  id           String              @id @default(uuid())
+  userId       String
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceKey    String
+  name         String
+  platform     String
+  lastSeenAt   DateTime            @default(now())
+  revokedAt    DateTime?
+  createdAt    DateTime            @default(now())
+  sessions     Session[]
+  reservations CreditReservation[]
+
+  @@unique([userId, deviceKey])
+  @@index([userId])
+}
+
+model Session {
+  id               String   @id @default(uuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId         String?
+  device           Device?  @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  accessTokenHash  String   @unique
+  refreshTokenHash String   @unique
+  accessExpiresAt  DateTime
+  refreshExpiresAt DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime @default(now())
+  lastSeenAt       DateTime @default(now())
+
+  @@index([userId])
+  @@index([refreshExpiresAt])
+}
+
+model CreditWallet {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance   Int      @default(0)
+  reserved  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CreditAction {
+  code         String              @id
+  unitCost     Int
+  enabled      Boolean             @default(true)
+  label        String
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  reservations CreditReservation[]
+}
+
+model CreditReservation {
+  id             String            @id @default(uuid())
+  userId         String
+  user           User              @relation("ReservationUser", fields: [userId], references: [id], onDelete: Cascade)
+  deviceId       String?
+  device         Device?           @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  actionCode     String
+  action         CreditAction      @relation(fields: [actionCode], references: [code])
+  quantity       Int
+  amount         Int
+  status         ReservationStatus @default(RESERVED)
+  idempotencyKey String
+  description    String?
+  createdAt      DateTime          @default(now())
+  committedAt    DateTime?
+  refundedAt     DateTime?
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, status])
+  @@index([createdAt])
+}
+
+model CreditTransaction {
+  id            String                @id @default(uuid())
+  userId        String
+  user          User                  @relation("CreditTransactionUser", fields: [userId], references: [id], onDelete: Cascade)
+  amount        Int
+  balanceAfter  Int
+  kind          CreditTransactionKind
+  reservationId String?
+  stripeEventId String?               @unique
+  description   String?
+  adminId       String?
+  createdAt     DateTime              @default(now())
+
+  @@index([userId, createdAt])
+  @@index([reservationId])
+}
+
+model Subscription {
+  id                   String   @id @default(uuid())
+  userId               String
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stripeSubscriptionId String   @unique
+  sku                  String
+  status               String
+  creditsPerCycle      Int      @default(0)
+  unlimited            Boolean  @default(false)
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([userId, status])
+}
+
+model WebhookEvent {
+  stripeEventId String   @id
+  type          String
+  processedAt   DateTime @default(now())
+}
+
+model AdminAuditLog {
+  id         String   @id @default(uuid())
+  adminId    String
+  admin      User     @relation("AdminActor", fields: [adminId], references: [id], onDelete: Restrict)
+  action     String
+  targetType String
+  targetId   String
+  oldValue   String?
+  newValue   String?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([adminId, createdAt])
+  @@index([targetType, targetId])
+}
