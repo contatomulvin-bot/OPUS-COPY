@@ -3,13 +3,19 @@ import { z } from "zod";
 const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1),
   PORT: z.coerce.number().int().positive().default(4100),
-  WEB_URL: z.string().url().default("http://localhost:3000"),
-  CORS_ORIGINS: z.string().default("http://localhost:3000"),
+  WEB_URL: z.string().url().default("https://www.mistcut.com"),
+  CORS_ORIGINS: z.string().default("https://www.mistcut.com,https://mistcut.com"),
   TRUST_PROXY: z.coerce.number().int().min(0).default(1),
   ALLOW_REGISTRATION: z.string().default("true"),
+
+  SUPABASE_URL: z.string().url(),
+  SUPABASE_PUBLISHABLE_KEY: z.string().min(20),
+  MISTCUT_SUPER_ADMIN_EMAILS: z.string().default(""),
+
   GEMINI_API_KEY: z.string().default(""),
   GEMINI_MODEL: z.string().default("gemini-3.6-flash"),
   GEMINI_FALLBACK_MODELS: z.string().default("gemini-3.5-flash,gemini-3.5-flash-lite"),
+
   STRIPE_SECRET_KEY: z.string().default(""),
   STRIPE_WEBHOOK_SECRET: z.string().default(""),
   STRIPE_PRICE_STANDARD: z.string().default(""),
@@ -19,11 +25,10 @@ const EnvSchema = z.object({
   STRIPE_PRICE_EXTRA_2000: z.string().default(""),
   STRIPE_PRICE_EXTRA_5000: z.string().default(""),
   STRIPE_PRICE_EXTRA_10000: z.string().default(""),
-  ACCESS_TOKEN_MINUTES: z.coerce.number().int().min(5).max(120).default(15),
-  REFRESH_TOKEN_DAYS: z.coerce.number().int().min(1).max(180).default(30),
+
   APP_LATEST_VERSION: z.string().default("4.7.1"),
   APP_MINIMUM_VERSION: z.string().default("4.7.1"),
-  APP_DOWNLOAD_URL: z.string().default("")
+  APP_DOWNLOAD_URL: z.string().url().or(z.literal("")).default("")
 });
 
 export const env = EnvSchema.parse(process.env);
@@ -34,6 +39,13 @@ export const allowedOrigins = env.CORS_ORIGINS
   .filter(Boolean);
 
 export const allowRegistration = env.ALLOW_REGISTRATION.toLowerCase() === "true";
+
+export const superAdminEmails = new Set(
+  env.MISTCUT_SUPER_ADMIN_EMAILS
+    .split(",")
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean)
+);
 
 export type CatalogSku =
   | "STANDARD"
