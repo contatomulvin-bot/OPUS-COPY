@@ -169,7 +169,8 @@ export async function reserveCredits(input: {
 export async function commitReservation(
   userId: string,
   reservationId: string,
-  actualQuantity?: number
+  actualQuantity?: number,
+  resultJson?: string
 ) {
   return serializable(async tx => {
     const reservation = await tx.creditReservation.findFirst({
@@ -234,7 +235,8 @@ export async function commitReservation(
         status: ReservationStatus.COMMITTED,
         committedAt: new Date(),
         settledQuantity,
-        settledAmount
+        settledAmount,
+        resultJson: resultJson ?? reservation.resultJson
       }
     });
 
