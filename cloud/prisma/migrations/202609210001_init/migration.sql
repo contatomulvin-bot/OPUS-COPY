@@ -68,6 +68,8 @@ CREATE TABLE "CreditReservation" (
     "actionCode" TEXT NOT NULL,
     "quantity" INTEGER NOT NULL,
     "amount" INTEGER NOT NULL,
+    "settledQuantity" INTEGER,
+    "settledAmount" INTEGER,
     "status" "ReservationStatus" NOT NULL DEFAULT 'RESERVED',
     "idempotencyKey" TEXT NOT NULL,
     "description" TEXT,
