@@ -107,18 +107,10 @@ class LoginDialog(QDialog):
 
 def ensure_login(client: MistcutCloudClient) -> bool:
     if client.restore_session():
-        try:
-            client.reconcile_pending()
-        except CloudError:
-            pass
         return True
 
     dialog = LoginDialog(client)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return False
 
-    try:
-        client.reconcile_pending()
-    except CloudError:
-        pass
     return True
