@@ -20,6 +20,8 @@ on:
 jobs:
   cloud:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: "postgresql://mistcut:mistcut@127.0.0.1:5432/mistcut?schema=public"
     defaults:
       run:
         working-directory: cloud
