@@ -634,7 +634,7 @@ app.get("/v1/devices", authMiddleware, async (req: AuthRequest, res) => {
 
 app.delete("/v1/devices/:id", authMiddleware, async (req: AuthRequest, res) => {
   const device = await prisma.device.findFirst({
-    where: { id: req.params.id, userId: req.auth!.userId }
+    where: { id: String(req.params.id), userId: req.auth!.userId }
   });
   if (!device) return apiError(res, 404, "DEVICE_NOT_FOUND", "Dispositivo não encontrado.");
 
@@ -700,7 +700,7 @@ app.post(
         : z.number().int().min(0).max(100).parse(req.body.actualQuantity);
     const result = await commitReservation(
       req.auth!.userId,
-      req.params.id,
+      String(req.params.id),
       actualQuantity
     );
     return res.json({
@@ -721,7 +721,7 @@ app.post(
       typeof req.body?.description === "string" ? req.body.description.slice(0, 300) : undefined;
     const result = await refundReservation(
       req.auth!.userId,
-      req.params.id,
+      String(req.params.id),
       description
     );
     return res.json({
@@ -833,7 +833,7 @@ app.post(
   requireAdmin,
   async (req: AuthRequest, res) => {
     const input = AdminCreditSchema.parse(req.body);
-    const target = await prisma.user.findUnique({ where: { id: req.params.userId } });
+    const target = await prisma.user.findUnique({ where: { id: String(req.params.userId) } });
     if (!target) return apiError(res, 404, "USER_NOT_FOUND", "Usuário não encontrado.");
 
     const result = await adminAdjustCredits({
