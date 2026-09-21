@@ -3,9 +3,10 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import Stripe from "stripe";
-import { CreditTransactionKind, Prisma, UserRole } from "@prisma/client";
+import { CreditTransactionKind, Prisma, ReservationStatus, UserRole } from "@prisma/client";
 import { z, ZodError } from "zod";
 import { prisma } from "./db.js";
+import { analyzeTranscript } from "./ai.js";
 import {
   allowRegistration,
   allowedOrigins,
@@ -309,7 +310,7 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "8mb" }));
 
 const globalLimiter = rateLimit({
   windowMs: 60_000,
@@ -325,6 +326,13 @@ const authLimiter = rateLimit({
   standardHeaders: "draft-7",
   legacyHeaders: false,
   skipSuccessfulRequests: true
+});
+
+const aiLimiter = rateLimit({
+  windowMs: 10 * 60_000,
+  limit: 30,
+  standardHeaders: "draft-7",
+  legacyHeaders: false
 });
 
 async function issueSession(userId: string, deviceId: string | null) {
@@ -667,70 +675,109 @@ app.get("/v1/credits/quote", authMiddleware, async (req: AuthRequest, res) => {
   return res.json(await quoteCredits(req.auth!.userId, actionCode, quantity));
 });
 
-const ReserveSchema = z.object({
-  actionCode: z.string().min(1).max(80),
-  quantity: z.number().int().min(1).max(100),
+const AnalyzeSchema = z.object({
   idempotencyKey: z.string().min(8).max(200),
-  description: z.string().max(300).optional()
+  maxClips: z.number().int().min(1).max(20),
+  segments: z.array(
+    z.object({
+      start: z.number().finite().min(0),
+      end: z.number().finite().positive(),
+      text: z.string().min(1).max(4000)
+    }).refine(segment => segment.end > segment.start, {
+      message: "O final do segmento deve ser maior que o início."
+    })
+  ).min(1).max(10000)
 });
 
-app.post("/v1/credits/reservations", authMiddleware, async (req: AuthRequest, res) => {
-  const input = ReserveSchema.parse(req.body);
-  const result = await reserveCredits({
-    userId: req.auth!.userId,
-    deviceId: req.auth!.deviceId,
-    ...input
-  });
-  return res.status(201).json({
-    reservation: result.reservation,
-    credits: {
-      balance: result.wallet?.balance || 0,
-      reserved: result.wallet?.reserved || 0
+app.post(
+  "/v1/ai/analyze",
+  authMiddleware,
+  aiLimiter,
+  async (req: AuthRequest, res) => {
+    const input = AnalyzeSchema.parse(req.body);
+    const userId = req.auth!.userId;
+
+    const metering = await reserveCredits({
+      userId,
+      deviceId: req.auth!.deviceId,
+      actionCode: "SHORT_AI",
+      quantity: input.maxClips,
+      idempotencyKey: input.idempotencyKey,
+      description: input.maxClips + " short(s) solicitados à IA do MISTCUT"
+    });
+
+    if (!metering.created) {
+      const existing = metering.reservation;
+      if (existing.status === ReservationStatus.COMMITTED && existing.resultJson) {
+        const cached = JSON.parse(existing.resultJson);
+        return res.json({
+          ...cached,
+          cached: true,
+          credits: {
+            balance: metering.wallet?.balance || 0,
+            reserved: metering.wallet?.reserved || 0
+          }
+        });
+      }
+      if (existing.status === ReservationStatus.REFUNDED) {
+        return apiError(
+          res,
+          409,
+          "AI_ATTEMPT_FAILED",
+          "Esta tentativa já falhou e foi reembolsada. Inicie uma nova tentativa."
+        );
+      }
+      return apiError(
+        res,
+        409,
+        "AI_ANALYSIS_IN_PROGRESS",
+        "Esta análise já está sendo processada."
+      );
     }
-  });
-});
 
-app.post(
-  "/v1/credits/reservations/:id/commit",
-  authMiddleware,
-  async (req: AuthRequest, res) => {
-    const actualQuantity =
-      req.body?.actualQuantity === undefined
-        ? undefined
-        : z.number().int().min(0).max(100).parse(req.body.actualQuantity);
-    const result = await commitReservation(
-      req.auth!.userId,
-      String(req.params.id),
-      actualQuantity
-    );
-    return res.json({
-      reservation: result.reservation,
-      credits: {
-        balance: result.wallet?.balance || 0,
-        reserved: result.wallet?.reserved || 0
-      }
-    });
-  }
-);
+    try {
+      const clips = await analyzeTranscript(input.segments, input.maxClips);
+      const resultJson = JSON.stringify({ clips });
+      const settled = await commitReservation(
+        userId,
+        metering.reservation.id,
+        clips.length,
+        resultJson
+      );
 
-app.post(
-  "/v1/credits/reservations/:id/refund",
-  authMiddleware,
-  async (req: AuthRequest, res) => {
-    const description =
-      typeof req.body?.description === "string" ? req.body.description.slice(0, 300) : undefined;
-    const result = await refundReservation(
-      req.auth!.userId,
-      String(req.params.id),
-      description
-    );
-    return res.json({
-      reservation: result.reservation,
-      credits: {
-        balance: result.wallet?.balance || 0,
-        reserved: result.wallet?.reserved || 0
+      return res.json({
+        clips,
+        cached: false,
+        credits: {
+          balance: settled.wallet?.balance || 0,
+          reserved: settled.wallet?.reserved || 0
+        },
+        metering: {
+          requestedClips: input.maxClips,
+          deliveredClips: clips.length,
+          chargedCredits: settled.reservation.settledAmount ?? settled.reservation.amount
+        }
+      });
+    } catch (error) {
+      try {
+        await refundReservation(
+          userId,
+          metering.reservation.id,
+          "Falha confirmada pelo MISTCUT Cloud durante análise de IA"
+        );
+        await prisma.creditReservation.update({
+          where: { id: metering.reservation.id },
+          data: {
+            failureCode: error instanceof Error
+              ? error.name.slice(0, 100)
+              : "AI_ANALYSIS_FAILED"
+          }
+        });
+      } catch (refundError) {
+        console.error("Falha ao reembolsar análise de IA:", refundError);
       }
-    });
+      throw error;
+    }
   }
 );
 
