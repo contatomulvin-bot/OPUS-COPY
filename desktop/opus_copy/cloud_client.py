@@ -286,11 +286,16 @@ class MistcutCloudClient:
             self.credits = payload["credits"]
         return payload
 
-    def commit(self, reservation_id: str) -> dict[str, Any]:
+    def commit(
+        self, reservation_id: str, actual_quantity: int | None = None
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {}
+        if actual_quantity is not None:
+            body["actualQuantity"] = int(actual_quantity)
         payload = self._request(
             "POST",
             "/v1/credits/reservations/" + reservation_id + "/commit",
-            {},
+            body,
         )
         if isinstance(payload.get("credits"), dict):
             self.credits = payload["credits"]
