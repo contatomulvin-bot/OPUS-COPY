@@ -41,7 +41,7 @@ class MistcutCloudClient:
 
     @classmethod
     def from_env(cls) -> "MistcutCloudClient":
-        return cls(os.getenv("MISTCUT_CLOUD_API_URL", "http://localhost:4100"))
+        return cls(os.getenv("MISTCUT_CLOUD_API_URL", "https://api.mistcut.com"))
 
     def _load_or_create_device_key(self) -> str:
         path = self.data_dir / "device.json"
@@ -156,6 +156,7 @@ class MistcutCloudClient:
         headers = {
             "Accept": "application/json",
             "User-Agent": "MISTCUT-Desktop/4.7",
+            "X-Mistcut-Device-Key": self.device_key,
         }
         data = None
         if body is not None:
