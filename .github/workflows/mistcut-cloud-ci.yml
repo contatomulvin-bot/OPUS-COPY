@@ -1,0 +1,45 @@
+name: MISTCUT Cloud CI
+
+on:
+  pull_request:
+    paths:
+      - "cloud/**"
+      - "desktop/main.py"
+      - "desktop/cloud_ui.py"
+      - "desktop/opus_copy/cloud_client.py"
+      - ".env.example"
+  push:
+    branches:
+      - "feature/mistcut-cloud-credits"
+    paths:
+      - "cloud/**"
+      - "desktop/main.py"
+      - "desktop/cloud_ui.py"
+      - "desktop/opus_copy/cloud_client.py"
+
+jobs:
+  cloud:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: "postgresql://mistcut:mistcut@127.0.0.1:5432/mistcut?schema=public"
+    defaults:
+      run:
+        working-directory: cloud
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install
+      - run: npx prisma validate
+      - run: npx prisma generate
+      - run: npm run lint
+
+  desktop-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m py_compile desktop/main.py desktop/cloud_ui.py desktop/opus_copy/cloud_client.py

@@ -30,6 +30,8 @@ if not WORKSPACE_ROOT.is_absolute():
 from opus_copy.pipeline import Pipeline  # noqa: E402
 from opus_copy.renderer import SubtitleStyle  # noqa: E402
 from opus_copy.tools import ToolError, probe_tool  # noqa: E402
+from opus_copy.cloud_client import CloudError, MistcutCloudClient  # noqa: E402
+from cloud_ui import ensure_login  # noqa: E402
 
 APP_STYLE = """
 QMainWindow, QWidget { background:#0b0b0d; color:#f5f5f7; font-family:"Segoe UI Variable","Segoe UI"; }
@@ -69,12 +71,12 @@ class Worker(QObject):
     progress = Signal(str, int)
     finished = Signal(list)
     failed = Signal(str)
-    def __init__(self, url: str, max_clips: int, output_dir: Path, subtitle_style: SubtitleStyle, language: str) -> None:
-        super().__init__(); self.url=url; self.max_clips=max_clips; self.output_dir=output_dir; self.subtitle_style=subtitle_style; self.language=language
+    def __init__(self, url: str, max_clips: int, output_dir: Path, subtitle_style: SubtitleStyle, language: str, cloud=None) -> None:
+        super().__init__(); self.url=url; self.max_clips=max_clips; self.output_dir=output_dir; self.subtitle_style=subtitle_style; self.language=language; self.cloud=cloud
     @Slot()
     def run(self) -> None:
         try:
-            outputs = Pipeline(WORKSPACE_ROOT).run(self.url, self.max_clips, self.progress.emit, output_dir=self.output_dir, subtitle_style=self.subtitle_style, language=self.language)
+            outputs = Pipeline(WORKSPACE_ROOT, cloud=self.cloud).run(self.url, self.max_clips, self.progress.emit, output_dir=self.output_dir, subtitle_style=self.subtitle_style, language=self.language)
             self.finished.emit([str(p) for p in outputs])
         except Exception as exc:
             self.failed.emit(f"{exc}\n\n{traceback.format_exc()}")
@@ -115,12 +117,37 @@ class VideoCard(QFrame):
         if self.path.is_file(): os.startfile(str(self.path))
 
 class MainWindow(QMainWindow):
-    def __init__(self)->None:
-        super().__init__(); self.setWindowTitle("OPUS-COPY"); self.setMinimumSize(1100,780); self.resize(1240,860); self.setStyleSheet(APP_STYLE); self.setWindowIcon(QIcon(str(ROOT/"assets"/"opus-copy-logo.svg"))); self.thread=None; self.worker=None; self.output_dir=WORKSPACE_ROOT/"clips"; self.output_dir.mkdir(parents=True,exist_ok=True); self.video_cards=[]; self.started_at=0.0
+    def __init__(self, cloud: MistcutCloudClient | None = None)->None:
+        super().__init__(); self.setWindowTitle("MISTCUT"); self.setMinimumSize(1100,780); self.resize(1240,860); self.setStyleSheet(APP_STYLE); self.setWindowIcon(QIcon(str(ROOT/"assets"/"opus-copy-logo.svg"))); self.thread=None; self.worker=None; self.cloud=cloud; self.output_dir=WORKSPACE_ROOT/"clips"; self.output_dir.mkdir(parents=True,exist_ok=True); self.video_cards=[]; self.started_at=0.0
         root=QWidget(); root_layout=QVBoxLayout(root); root_layout.setContentsMargins(20,18,20,18); root_layout.setSpacing(11)
-        header=QHBoxLayout(); header.setSpacing(10); logo=QLabel(); logo.setFixedSize(46,46); logo.setPixmap(QIcon(str(ROOT/"assets"/"opus-copy-logo.svg")).pixmap(42,42)); header.addWidget(logo); brand_col=QVBoxLayout(); brand_col.setSpacing(1); brand=QLabel("OPUS-COPY"); brand.setObjectName("brand"); eyebrow=QLabel("AI VIDEO CLIPPER"); eyebrow.setObjectName("eyebrow"); brand_col.addWidget(brand); brand_col.addWidget(eyebrow); header.addLayout(brand_col); header.addStretch(1); engine=QLabel("WHISPERX  •  GEMINI  •  FFMPEG"); engine.setObjectName("muted"); header.addWidget(engine,0,Qt.AlignTop); root_layout.addLayout(header)
+        header=QHBoxLayout(); header.setSpacing(10); logo=QLabel(); logo.setFixedSize(46,46); logo.setPixmap(QIcon(str(ROOT/"assets"/"opus-copy-logo.svg")).pixmap(42,42)); header.addWidget(logo); brand_col=QVBoxLayout(); brand_col.setSpacing(1); brand=QLabel("MISTCUT"); brand.setObjectName("brand"); eyebrow=QLabel("AI VIDEO CLIPPER"); eyebrow.setObjectName("eyebrow"); brand_col.addWidget(brand); brand_col.addWidget(eyebrow); header.addLayout(brand_col); header.addStretch(1); engine=QLabel("WHISPERX  •  GEMINI  •  FFMPEG"); engine.setObjectName("muted"); header.addWidget(engine,0,Qt.AlignTop); self.account_label=QLabel("CONTA"); self.account_label.setObjectName("muted"); header.addWidget(self.account_label,0,Qt.AlignTop); self.credit_label=QLabel("— CRÉDITOS"); self.credit_label.setObjectName("value"); header.addWidget(self.credit_label,0,Qt.AlignTop); root_layout.addLayout(header)
         self.tabs=QTabWidget(); self.tabs.setDocumentMode(True); self.tabs.addTab(self.build_creation_tab(),"CRIAÇÃO"); self.tabs.addTab(self.build_videos_tab(),"VÍDEOS JÁ CRIADOS"); root_layout.addWidget(self.tabs,1)
-        footer=QLabel("OPUS-COPY  /  local-first workflow"); footer.setObjectName("muted"); footer.setAlignment(Qt.AlignCenter); root_layout.addWidget(footer); self.setCentralWidget(root); self.refresh_videos()
+        footer=QLabel("MISTCUT  /  processamento local • conta e créditos protegidos na nuvem"); footer.setObjectName("muted"); footer.setAlignment(Qt.AlignCenter); root_layout.addWidget(footer); self.setCentralWidget(root); self.refresh_videos(); self.refresh_cloud_badge()
+    def refresh_cloud_badge(self)->None:
+        if not self.cloud:
+            self.account_label.setText("DEV OFFLINE")
+            self.credit_label.setText("CRÉDITOS DESATIVADOS")
+            return
+        try:
+            payload=self.cloud.balance()
+            profile=self.cloud.profile or {}
+            email=str(profile.get("email","Conta MISTCUT"))
+            self.account_label.setText(email)
+            if bool(payload.get("unlimited",False)):
+                self.credit_label.setText("∞ CRÉDITOS")
+            else:
+                self.credit_label.setText(f"{int(payload.get('balance',0)):,} CRÉDITOS".replace(",","."))
+        except CloudError:
+            self.account_label.setText("MISTCUT CLOUD")
+            self.credit_label.setText("SINCRONIZAÇÃO PENDENTE")
+    def apply_credit_payload(self,payload:dict)->None:
+        credits=payload.get("credits",payload) if isinstance(payload,dict) else {}
+        if not isinstance(credits,dict): return
+        if bool(credits.get("unlimited",False)):
+            self.credit_label.setText("∞ CRÉDITOS")
+            return
+        if "balance" in credits:
+            self.credit_label.setText(f"{int(credits.get('balance',0)):,} CRÉDITOS".replace(",","."))
     def build_creation_tab(self)->QWidget:
         page=QWidget(); layout=QVBoxLayout(page); layout.setContentsMargins(14,14,14,14); layout.setSpacing(11)
         hero=QFrame(); hero.setObjectName("card"); hero_layout=QVBoxLayout(hero); hero_layout.setContentsMargins(18,16,18,16); hero_layout.setSpacing(4); headline=QLabel("Transforme vídeos longos em clips que prendem atenção."); headline.setObjectName("headline"); desc=QLabel("Escolha o idioma para acelerar a transcrição, configure as legendas e confira o preview antes de gerar."); desc.setObjectName("muted"); desc.setWordWrap(True); hero_layout.addWidget(headline); hero_layout.addWidget(desc); layout.addWidget(hero)
@@ -167,14 +194,38 @@ class MainWindow(QMainWindow):
         self.eta.setText(f"Tempo restante: ~{self.format_eta(elapsed*(100-percent)/percent)}")
     def start_pipeline(self)->None:
         url=self.url.text().strip()
-        if not url: QMessageBox.warning(self,"OPUS-COPY","Cole uma URL do YouTube."); return
-        self.start.setEnabled(False); self.choose_output.setEnabled(False); self.progress_bar.setValue(0); self.eta.setText("Tempo restante: calculando..."); self.status.setText("Preparando análise…"); self.started_at=time.monotonic(); self.thread=QThread(); self.worker=Worker(url,self.count.value(),self.output_dir,self.subtitle_style(),self.language.currentData()); self.worker.moveToThread(self.thread); self.thread.started.connect(self.worker.run); self.worker.progress.connect(self.update_progress); self.worker.finished.connect(self.completed); self.worker.failed.connect(self.failed); self.worker.finished.connect(self.thread.quit); self.worker.failed.connect(self.thread.quit); self.thread.finished.connect(self.thread.deleteLater); self.thread.start()
+        if not url:
+            QMessageBox.warning(self,"MISTCUT","Cole uma URL do YouTube.")
+            return
+
+        if self.cloud:
+            try:
+                requested=self.count.value()
+                quote=self.cloud.quote("SHORT_AI",requested)
+                required=int(quote.get("totalCost",0))
+                available=int(quote.get("availableCredits",0))
+                if not bool(quote.get("unlimited",False)) and available<required:
+                    QMessageBox.warning(
+                        self,
+                        "MISTCUT — créditos insuficientes",
+                        f"Este processamento precisa de até {required} créditos e sua conta possui {available}.\n\nCompre créditos no site do MISTCUT para continuar."
+                    )
+                    return
+            except CloudError as exc:
+                QMessageBox.critical(
+                    self,
+                    "MISTCUT Cloud",
+                    f"Não foi possível validar sua conta e créditos.\n\n{exc}"
+                )
+                return
+
+        self.start.setEnabled(False); self.choose_output.setEnabled(False); self.progress_bar.setValue(0); self.eta.setText("Tempo restante: calculando..."); self.status.setText("Preparando análise…"); self.started_at=time.monotonic(); self.thread=QThread(); self.worker=Worker(url,self.count.value(),self.output_dir,self.subtitle_style(),self.language.currentData(),self.cloud); self.worker.moveToThread(self.thread); self.thread.started.connect(self.worker.run); self.worker.progress.connect(self.update_progress); self.worker.finished.connect(self.completed); self.worker.failed.connect(self.failed); self.worker.finished.connect(self.thread.quit); self.worker.failed.connect(self.thread.quit); self.thread.finished.connect(self.thread.deleteLater); self.thread.start()
     @Slot(list)
     def completed(self,outputs:list)->None:
-        self.start.setEnabled(True); self.choose_output.setEnabled(True); self.progress_bar.setValue(100); self.eta.setText("Tempo restante: 0s"); self.status.setText(f"Concluído · {len(outputs)} clip(s) gerado(s) em {self.output_dir}"); self.refresh_videos(); self.tabs.setCurrentIndex(1)
+        self.start.setEnabled(True); self.choose_output.setEnabled(True); self.progress_bar.setValue(100); self.eta.setText("Tempo restante: 0s"); self.status.setText(f"Concluído · {len(outputs)} clip(s) gerado(s) em {self.output_dir}"); self.refresh_cloud_badge(); self.refresh_videos(); self.tabs.setCurrentIndex(1)
     @Slot(str)
     def failed(self,message:str)->None:
-        self.start.setEnabled(True); self.choose_output.setEnabled(True); self.eta.setText("Tempo restante: —"); self.status.setText("Falha no processamento."); box=QMessageBox(self); box.setIcon(QMessageBox.Icon.Critical); box.setWindowTitle("OPUS-COPY — erro"); box.setText("O processamento falhou."); box.setDetailedText(message); copy_button=box.addButton("Copiar erro completo",QMessageBox.ButtonRole.ActionRole); box.addButton(QMessageBox.StandardButton.Close); box.exec();
+        self.start.setEnabled(True); self.choose_output.setEnabled(True); self.eta.setText("Tempo restante: —"); self.status.setText("Falha no processamento."); self.refresh_cloud_badge(); box=QMessageBox(self); box.setIcon(QMessageBox.Icon.Critical); box.setWindowTitle("MISTCUT — erro"); box.setText("O processamento falhou."); box.setDetailedText(message); copy_button=box.addButton("Copiar erro completo",QMessageBox.ButtonRole.ActionRole); box.addButton(QMessageBox.StandardButton.Close); box.exec()
         if box.clickedButton() is copy_button: QApplication.clipboard().setText(message)
     def refresh_videos(self)->None:
         if not hasattr(self,"video_grid"): return
@@ -186,8 +237,20 @@ class MainWindow(QMainWindow):
         for col in range(columns): self.video_grid.setColumnStretch(col,1)
 
 def main()->int:
-    app=QApplication(sys.argv); app.setApplicationName("OPUS-COPY"); app.setFont(QFont("Segoe UI",10))
+    app=QApplication(sys.argv); app.setApplicationName("MISTCUT"); app.setFont(QFont("Segoe UI",10))
     try: yt=probe_tool("yt-dlp"); ffmpeg=probe_tool("ffmpeg","-version")
-    except ToolError as exc: QMessageBox.critical(None,"OPUS-COPY — dependência ausente",str(exc)); return 1
-    window=MainWindow(); window.status.setText(f"Pronto · {yt}  |  {ffmpeg}"); window.show(); return app.exec()
+    except ToolError as exc: QMessageBox.critical(None,"MISTCUT — dependência ausente",str(exc)); return 1
+
+    cloud=None
+    offline_dev=os.getenv("MISTCUT_CLOUD_DISABLED","0").strip().lower() in {"1","true","yes"}
+    if not offline_dev:
+        cloud=MistcutCloudClient.from_env()
+        if not ensure_login(cloud):
+            return 0
+
+    window=MainWindow(cloud)
+    cloud_status="DEV OFFLINE" if offline_dev else "CONTA SINCRONIZADA"
+    window.status.setText(f"Pronto · {yt}  |  {ffmpeg}  |  {cloud_status}")
+    window.show()
+    return app.exec()
 if __name__ == "__main__": raise SystemExit(main())
