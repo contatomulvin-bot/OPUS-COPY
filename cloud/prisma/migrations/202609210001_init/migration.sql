@@ -70,6 +70,8 @@ CREATE TABLE "CreditReservation" (
     "amount" INTEGER NOT NULL,
     "settledQuantity" INTEGER,
     "settledAmount" INTEGER,
+    "resultJson" TEXT,
+    "failureCode" TEXT,
     "status" "ReservationStatus" NOT NULL DEFAULT 'RESERVED',
     "idempotencyKey" TEXT NOT NULL,
     "description" TEXT,
