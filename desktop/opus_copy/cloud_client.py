@@ -266,104 +266,40 @@ class MistcutCloudClient:
         query = parse.urlencode({"actionCode": action_code, "quantity": quantity})
         return self._request("GET", "/v1/credits/quote?" + query)
 
-    def reserve(
+    def analyze_transcript(
         self,
-        action_code: str,
-        quantity: int,
+        transcript: dict[str, Any],
+        max_clips: int,
         idempotency_key: str,
-        description: str,
     ) -> dict[str, Any]:
+        raw_segments = transcript.get("segments", [])
+        segments = []
+        for item in raw_segments:
+            try:
+                start = float(item.get("start", 0))
+                end = float(item.get("end", 0))
+                text = str(item.get("text", "")).strip()
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if text and end > start >= 0:
+                segments.append({"start": start, "end": end, "text": text})
+
+        if not segments:
+            raise CloudError(
+                "INVALID_TRANSCRIPT",
+                "A transcrição não contém segmentos utilizáveis.",
+            )
+
         payload = self._request(
             "POST",
-            "/v1/credits/reservations",
+            "/v1/ai/analyze",
             {
-                "actionCode": action_code,
-                "quantity": quantity,
+                "segments": segments,
+                "maxClips": int(max_clips),
                 "idempotencyKey": idempotency_key,
-                "description": description,
             },
         )
         if isinstance(payload.get("credits"), dict):
             self.credits = payload["credits"]
         return payload
 
-    def commit(
-        self, reservation_id: str, actual_quantity: int | None = None
-    ) -> dict[str, Any]:
-        body: dict[str, Any] = {}
-        if actual_quantity is not None:
-            body["actualQuantity"] = int(actual_quantity)
-        payload = self._request(
-            "POST",
-            "/v1/credits/reservations/" + reservation_id + "/commit",
-            body,
-        )
-        if isinstance(payload.get("credits"), dict):
-            self.credits = payload["credits"]
-        return payload
-
-    def refund(self, reservation_id: str, description: str) -> dict[str, Any]:
-        payload = self._request(
-            "POST",
-            "/v1/credits/reservations/" + reservation_id + "/refund",
-            {"description": description},
-        )
-        if isinstance(payload.get("credits"), dict):
-            self.credits = payload["credits"]
-        return payload
-
-    @property
-    def _pending_path(self) -> Path:
-        return self.data_dir / "pending_settlements.json"
-
-    def queue_settlement(
-        self,
-        reservation_id: str,
-        action: str,
-        actual_quantity: int | None = None,
-    ) -> None:
-        if action not in {"commit", "refund"}:
-            raise ValueError("Invalid settlement action")
-        pending = self._read_pending()
-        if not any(item.get("reservationId") == reservation_id for item in pending):
-            item: dict[str, Any] = {
-                "reservationId": reservation_id,
-                "action": action,
-            }
-            if actual_quantity is not None:
-                item["actualQuantity"] = int(actual_quantity)
-            pending.append(item)
-        self._pending_path.write_text(json.dumps(pending, indent=2), encoding="utf-8")
-
-    def _read_pending(self) -> list[dict[str, str]]:
-        try:
-            value = json.loads(self._pending_path.read_text(encoding="utf-8"))
-            return value if isinstance(value, list) else []
-        except Exception:
-            return []
-
-    def reconcile_pending(self) -> None:
-        pending = self._read_pending()
-        if not pending:
-            return
-        remaining: list[dict[str, str]] = []
-        for item in pending:
-            reservation_id = str(item.get("reservationId", ""))
-            action = str(item.get("action", ""))
-            if not reservation_id:
-                continue
-            try:
-                if action == "commit":
-                    actual_quantity = item.get("actualQuantity")
-                    self.commit(
-                        reservation_id,
-                        int(actual_quantity) if actual_quantity is not None else None,
-                    )
-                elif action == "refund":
-                    self.refund(reservation_id, "Reembolso pendente reconciliado pelo aplicativo")
-            except CloudError:
-                remaining.append(item)
-        if remaining:
-            self._pending_path.write_text(json.dumps(remaining, indent=2), encoding="utf-8")
-        else:
-            self._pending_path.unlink(missing_ok=True)
