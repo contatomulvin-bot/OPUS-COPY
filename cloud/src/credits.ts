@@ -103,7 +103,7 @@ export async function reserveCredits(input: {
     });
     if (existing) {
       const wallet = await tx.creditWallet.findUnique({ where: { userId: input.userId } });
-      return { reservation: existing, wallet };
+      return { reservation: existing, wallet, created: false };
     }
 
     const action = await tx.creditAction.findUnique({ where: { code: input.actionCode } });
@@ -162,7 +162,7 @@ export async function reserveCredits(input: {
       });
     }
 
-    return { reservation, wallet: nextWallet };
+    return { reservation, wallet: nextWallet, created: true };
   });
 }
 
