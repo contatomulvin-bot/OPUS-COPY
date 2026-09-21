@@ -1,6 +1,5 @@
 import "dotenv/config";
-import { PrismaClient, UserRole } from "@prisma/client";
-import { hashPassword, normalizeEmail } from "../src/security.js";
+import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
@@ -18,36 +17,10 @@ async function main() {
     }
   });
 
-  const email = process.env.MISTCUT_ADMIN_EMAIL?.trim();
-  const password = process.env.MISTCUT_ADMIN_PASSWORD;
-
-  if (email && password) {
-    if (password.length < 12) {
-      throw new Error("MISTCUT_ADMIN_PASSWORD precisa ter pelo menos 12 caracteres.");
-    }
-
-    const normalized = normalizeEmail(email);
-    const passwordHash = await hashPassword(password);
-
-    await prisma.user.upsert({
-      where: { email: normalized },
-      create: {
-        email: normalized,
-        passwordHash,
-        role: UserRole.SUPER_ADMIN,
-        wallet: { create: {} }
-      },
-      update: {
-        passwordHash,
-        role: UserRole.SUPER_ADMIN,
-        disabledAt: null
-      }
-    });
-
-    console.log("Administrador MISTCUT criado/atualizado: " + normalized);
-  } else {
-    console.log("Admin não criado. Defina MISTCUT_ADMIN_EMAIL e MISTCUT_ADMIN_PASSWORD se necessário.");
-  }
+  console.log(
+    "CreditAction SHORT_AI pronta. Contas e senhas são gerenciadas pelo Supabase Auth. " +
+    "Para bootstrap de SUPER_ADMIN, configure MISTCUT_SUPER_ADMIN_EMAILS no backend."
+  );
 }
 
 main()
