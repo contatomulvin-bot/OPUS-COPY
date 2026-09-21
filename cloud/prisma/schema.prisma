@@ -112,6 +112,8 @@ model CreditReservation {
   action         CreditAction      @relation(fields: [actionCode], references: [code])
   quantity       Int
   amount         Int
+  settledQuantity Int?
+  settledAmount   Int?
   status         ReservationStatus @default(RESERVED)
   idempotencyKey String
   description    String?
