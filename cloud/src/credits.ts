@@ -166,7 +166,11 @@ export async function reserveCredits(input: {
   });
 }
 
-export async function commitReservation(userId: string, reservationId: string) {
+export async function commitReservation(
+  userId: string,
+  reservationId: string,
+  actualQuantity?: number
+) {
   return serializable(async tx => {
     const reservation = await tx.creditReservation.findFirst({
       where: { id: reservationId, userId }
@@ -182,16 +186,56 @@ export async function commitReservation(userId: string, reservationId: string) {
       throw new CreditError("RESERVATION_ALREADY_REFUNDED", "Esta reserva já foi reembolsada.");
     }
 
+    const settledQuantity =
+      actualQuantity === undefined ? reservation.quantity : actualQuantity;
+
+    if (
+      !Number.isInteger(settledQuantity) ||
+      settledQuantity < 0 ||
+      settledQuantity > reservation.quantity
+    ) {
+      throw new CreditError(
+        "INVALID_SETTLED_QUANTITY",
+        "Quantidade concluída inválida para esta reserva."
+      );
+    }
+
+    const unitCost =
+      reservation.quantity > 0 ? Math.floor(reservation.amount / reservation.quantity) : 0;
+    const settledAmount = unitCost * settledQuantity;
+    const refundAmount = Math.max(0, reservation.amount - settledAmount);
+
     const wallet = reservation.amount > 0
       ? await tx.creditWallet.update({
           where: { userId },
-          data: { reserved: { decrement: reservation.amount } }
+          data: {
+            reserved: { decrement: reservation.amount },
+            balance: refundAmount > 0 ? { increment: refundAmount } : undefined
+          }
         })
       : await tx.creditWallet.findUnique({ where: { userId } });
 
+    if (refundAmount > 0 && wallet) {
+      await tx.creditTransaction.create({
+        data: {
+          userId,
+          amount: refundAmount,
+          balanceAfter: wallet.balance,
+          kind: CreditTransactionKind.REFUND,
+          reservationId: reservation.id,
+          description: "Ajuste automático: menos clips concluídos que o reservado"
+        }
+      });
+    }
+
     const updated = await tx.creditReservation.update({
       where: { id: reservation.id },
-      data: { status: ReservationStatus.COMMITTED, committedAt: new Date() }
+      data: {
+        status: ReservationStatus.COMMITTED,
+        committedAt: new Date(),
+        settledQuantity,
+        settledAmount
+      }
     });
 
     return { reservation: updated, wallet };
@@ -306,7 +350,7 @@ export async function adminAdjustCredits(input: {
       where: { userId: input.userId },
       create: {
         userId: input.userId,
-        balance: Math.max(0, input.amount)
+        balance: 0
       },
       update: {}
     });
