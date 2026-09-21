@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -25,7 +26,13 @@ class ClipCandidate:
 class ViralAnalyzer:
     """Ranks transcript moments for retention and YouTube audience potential."""
 
-    def __init__(self) -> None:
+    def __init__(self, cloud=None) -> None:
+        self.cloud = cloud
+        if self.cloud is not None:
+            self.client = None
+            self.model = ""
+            self.models = []
+            return
         try:
             from google import genai  # type: ignore
         except ImportError as exc:
@@ -159,6 +166,28 @@ TRANSCRIÇÃO DO BLOCO:
         ]
         if not compact:
             raise ToolError("A transcrição não contém texto utilizável.")
+
+        if self.cloud is not None:
+            fingerprint = hashlib.sha256(
+                json.dumps(
+                    {"segments": compact, "max_clips": max_clips},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            payload = self.cloud.analyze_transcript(
+                {"segments": compact},
+                max_clips=max_clips,
+                idempotency_key=f"ai-{fingerprint}",
+            )
+            candidates = self._parse_payload(
+                {"clips": payload.get("clips", [])},
+                compact,
+            )
+            if not candidates:
+                raise ToolError("O MISTCUT Cloud não retornou clips válidos.")
+            return sorted(candidates, key=lambda c: c.score, reverse=True)[:max_clips]
 
         # Long transcripts are analysed chronologically in independent windows.
         # The first window is explicitly marked as the opening so the model cannot
