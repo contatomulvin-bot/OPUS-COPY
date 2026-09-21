@@ -141,7 +141,10 @@ async function processStripeEvent(event: Stripe.Event): Promise<void> {
           userId,
           stripeSubscriptionId: subscriptionId,
           sku: item.sku,
-          status: "ACTIVE",
+          status:
+            session.payment_status === "paid" || session.payment_status === "no_payment_required"
+              ? "ACTIVE"
+              : "PENDING",
           creditsPerCycle: item.credits,
           unlimited: item.unlimited
         },
@@ -691,7 +694,15 @@ app.post(
   "/v1/credits/reservations/:id/commit",
   authMiddleware,
   async (req: AuthRequest, res) => {
-    const result = await commitReservation(req.auth!.userId, req.params.id);
+    const actualQuantity =
+      req.body?.actualQuantity === undefined
+        ? undefined
+        : z.number().int().min(0).max(100).parse(req.body.actualQuantity);
+    const result = await commitReservation(
+      req.auth!.userId,
+      req.params.id,
+      actualQuantity
+    );
     return res.json({
       reservation: result.reservation,
       credits: {
