@@ -13,15 +13,20 @@ import {
   catalog,
   env,
   getCatalogItem,
-  getCatalogItemByPriceId
+  getCatalogItemByPriceId,
+  superAdminEmails
 } from "./config.js";
+import { normalizeEmail } from "./security.js";
 import {
-  hashPassword,
-  hashToken,
-  normalizeEmail,
-  randomToken,
-  verifyPassword
-} from "./security.js";
+  SupabaseAuthError,
+  type SupabaseAuthUser,
+  type SupabaseSessionResult,
+  supabaseGetUser,
+  supabaseRefresh,
+  supabaseSignIn,
+  supabaseSignOut,
+  supabaseSignUp
+} from "./supabase.js";
 import {
   adminAdjustCredits,
   commitReservation,
@@ -34,9 +39,9 @@ import {
 
 type AuthContext = {
   userId: string;
-  sessionId: string;
   deviceId: string | null;
   role: UserRole;
+  accessToken: string;
 };
 
 type AuthRequest = Request & {
@@ -335,31 +340,97 @@ const aiLimiter = rateLimit({
   legacyHeaders: false
 });
 
-async function issueSession(userId: string, deviceId: string | null) {
-  const accessToken = randomToken(32);
-  const refreshToken = randomToken(48);
-  const now = Date.now();
-  const accessExpiresAt = new Date(now + env.ACCESS_TOKEN_MINUTES * 60_000);
-  const refreshExpiresAt = new Date(now + env.REFRESH_TOKEN_DAYS * 86_400_000);
+function supabaseDisplayName(user: SupabaseAuthUser): string | null {
+  const metadata = user.user_metadata || {};
+  for (const key of ["display_name", "full_name", "name"]) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim().slice(0, 80);
+    }
+  }
+  return null;
+}
 
-  const session = await prisma.session.create({
-    data: {
-      userId,
-      deviceId,
-      accessTokenHash: hashToken(accessToken),
-      refreshTokenHash: hashToken(refreshToken),
-      accessExpiresAt,
-      refreshExpiresAt
+async function syncSupabaseUser(
+  authUser: SupabaseAuthUser,
+  preferredDisplayName?: string
+) {
+  const email = normalizeEmail(authUser.email || "");
+  if (!email) {
+    throw new SupabaseAuthError(401, "SUPABASE_EMAIL_REQUIRED", "A conta autenticada não possui e-mail.");
+  }
+
+  const [byId, byEmail] = await Promise.all([
+    prisma.user.findUnique({ where: { id: authUser.id } }),
+    prisma.user.findUnique({ where: { email } })
+  ]);
+
+  if (byEmail && byEmail.id !== authUser.id) {
+    throw new SupabaseAuthError(
+      409,
+      "ACCOUNT_ID_CONFLICT",
+      "Esta conta precisa ser migrada antes de entrar."
+    );
+  }
+
+  const displayName =
+    preferredDisplayName?.trim().slice(0, 80) ||
+    byId?.displayName ||
+    supabaseDisplayName(authUser);
+
+  const role = superAdminEmails.has(email)
+    ? UserRole.SUPER_ADMIN
+    : byId?.role || UserRole.USER;
+
+  return prisma.user.upsert({
+    where: { id: authUser.id },
+    create: {
+      id: authUser.id,
+      email,
+      passwordHash: null,
+      displayName,
+      role,
+      wallet: { create: {} }
+    },
+    update: {
+      email,
+      displayName,
+      role
     }
   });
+}
 
-  return {
-    sessionId: session.id,
-    accessToken,
-    refreshToken,
-    accessExpiresAt,
-    refreshExpiresAt
-  };
+async function upsertDesktopDevice(
+  userId: string,
+  input: {
+    deviceKey?: string;
+    deviceName?: string;
+    platform?: string;
+  }
+) {
+  const deviceKey = input.deviceKey?.trim();
+  if (!deviceKey) return null;
+
+  return prisma.device.upsert({
+    where: {
+      userId_deviceKey: {
+        userId,
+        deviceKey
+      }
+    },
+    create: {
+      userId,
+      deviceKey,
+      name: (input.deviceName || "Windows PC").slice(0, 120),
+      platform: (input.platform || "Windows").slice(0, 80)
+    },
+    update: {
+      name: (input.deviceName || "Windows PC").slice(0, 120),
+      platform: (input.platform || "Windows").slice(0, 80),
+      lastSeenAt: new Date(),
+      revokedAt: null
+    }
+  });
 }
 
 async function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
@@ -368,43 +439,56 @@ async function authMiddleware(req: AuthRequest, res: Response, next: NextFunctio
     return apiError(res, 401, "AUTH_REQUIRED", "Autenticação necessária.");
   }
 
-  const token = header.slice(7).trim();
-  const session = await prisma.session.findUnique({
-    where: { accessTokenHash: hashToken(token) },
-    include: { user: true, device: true }
-  });
-
-  if (
-    !session ||
-    session.revokedAt ||
-    session.accessExpiresAt <= new Date() ||
-    session.user.disabledAt ||
-    session.device?.revokedAt
-  ) {
-    return apiError(res, 401, "SESSION_INVALID", "Sessão expirada ou inválida.");
+  const accessToken = header.slice(7).trim();
+  if (!accessToken) {
+    return apiError(res, 401, "AUTH_REQUIRED", "Autenticação necessária.");
   }
 
-  req.auth = {
-    userId: session.userId,
-    sessionId: session.id,
-    deviceId: session.deviceId,
-    role: session.user.role
-  };
+  try {
+    const authUser = await supabaseGetUser(accessToken);
+    const user = await syncSupabaseUser(authUser);
 
-  await Promise.all([
-    prisma.session.update({
-      where: { id: session.id },
-      data: { lastSeenAt: new Date() }
-    }),
-    session.deviceId
-      ? prisma.device.update({
-          where: { id: session.deviceId },
+    if (user.disabledAt) {
+      return apiError(res, 403, "ACCOUNT_DISABLED", "Esta conta está desativada.");
+    }
+
+    let deviceId: string | null = null;
+    const deviceKey = (req.header("x-mistcut-device-key") || "").trim();
+    if (deviceKey && deviceKey.length >= 8 && deviceKey.length <= 200) {
+      const device = await prisma.device.findUnique({
+        where: {
+          userId_deviceKey: {
+            userId: user.id,
+            deviceKey
+          }
+        }
+      });
+      if (device?.revokedAt) {
+        return apiError(res, 401, "DEVICE_REVOKED", "Este dispositivo foi revogado.");
+      }
+      if (device) {
+        deviceId = device.id;
+        await prisma.device.update({
+          where: { id: device.id },
           data: { lastSeenAt: new Date() }
-        })
-      : Promise.resolve()
-  ]);
+        });
+      }
+    }
 
-  return next();
+    req.auth = {
+      userId: user.id,
+      deviceId,
+      role: user.role,
+      accessToken
+    };
+    return next();
+  } catch (error) {
+    if (error instanceof SupabaseAuthError) {
+      const status = error.status >= 500 ? 502 : 401;
+      return apiError(res, status, error.code, "Sessão expirada ou inválida.");
+    }
+    return next(error);
+  }
 }
 
 function requireAdmin(req: AuthRequest, res: Response, next: NextFunction) {
@@ -419,20 +503,20 @@ const RegisterSchema = z.object({
   email: z.string().email().max(320),
   password: z.string().min(10).max(200),
   displayName: z.string().trim().min(1).max(80).optional(),
-  deviceKey: z.string().min(8).max(200),
-  deviceName: z.string().min(1).max(120),
-  platform: z.string().min(1).max(80).default("Windows")
+  deviceKey: z.string().min(8).max(200).optional(),
+  deviceName: z.string().min(1).max(120).optional(),
+  platform: z.string().min(1).max(80).optional()
 });
 
 const LoginSchema = z.object({
   email: z.string().email().max(320),
   password: z.string().min(1).max(200),
-  deviceKey: z.string().min(8).max(200),
-  deviceName: z.string().min(1).max(120),
-  platform: z.string().min(1).max(80).default("Windows")
+  deviceKey: z.string().min(8).max(200).optional(),
+  deviceName: z.string().min(1).max(120).optional(),
+  platform: z.string().min(1).max(80).optional()
 });
 
-async function authPayload(userId: string, sessionTokens: Awaited<ReturnType<typeof issueSession>>) {
+async function authPayload(userId: string, session: SupabaseSessionResult) {
   const [user, wallet] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
@@ -447,8 +531,16 @@ async function authPayload(userId: string, sessionTokens: Awaited<ReturnType<typ
     prisma.creditWallet.findUnique({ where: { userId } })
   ]);
 
+  const accessExpiresAt = session.expiresAt
+    ? new Date(session.expiresAt * 1000).toISOString()
+    : session.expiresIn
+      ? new Date(Date.now() + session.expiresIn * 1000).toISOString()
+      : null;
+
   return {
-    ...sessionTokens,
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken,
+    accessExpiresAt,
     user,
     credits: {
       balance: wallet?.balance || 0,
@@ -460,7 +552,11 @@ async function authPayload(userId: string, sessionTokens: Awaited<ReturnType<typ
 app.get("/health", async (_req, res) => {
   try {
     await prisma.$queryRawUnsafe("SELECT 1");
-    return res.json({ status: "ok", service: "mistcut-cloud" });
+    return res.json({
+      status: "ok",
+      service: "mistcut-cloud",
+      auth: "supabase"
+    });
   } catch {
     return apiError(res, 503, "DATABASE_UNAVAILABLE", "Banco indisponível.");
   }
@@ -473,66 +569,45 @@ app.post("/v1/auth/register", authLimiter, async (req, res) => {
 
   const input = RegisterSchema.parse(req.body);
   const email = normalizeEmail(input.email);
-  const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) {
-    return apiError(res, 409, "EMAIL_IN_USE", "Este e-mail já está cadastrado.");
+  const session = await supabaseSignUp(email, input.password, input.displayName);
+
+  if (!session.user) {
+    return apiError(res, 502, "SUPABASE_USER_MISSING", "O provedor de autenticação não retornou o usuário.");
   }
 
-  const passwordHash = await hashPassword(input.password);
-  const user = await prisma.user.create({
-    data: {
-      email,
-      passwordHash,
-      displayName: input.displayName,
-      wallet: { create: {} }
-    }
-  });
+  const user = await syncSupabaseUser(session.user, input.displayName);
 
-  const device = await prisma.device.create({
-    data: {
-      userId: user.id,
-      deviceKey: input.deviceKey,
-      name: input.deviceName,
-      platform: input.platform
-    }
-  });
+  if (!session.accessToken || !session.refreshToken) {
+    return res.status(202).json({
+      requiresEmailConfirmation: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.displayName
+      }
+    });
+  }
 
-  const tokens = await issueSession(user.id, device.id);
-  return res.status(201).json(await authPayload(user.id, tokens));
+  await upsertDesktopDevice(user.id, input);
+  return res.status(201).json(await authPayload(user.id, session));
 });
 
 app.post("/v1/auth/login", authLimiter, async (req, res) => {
   const input = LoginSchema.parse(req.body);
   const email = normalizeEmail(input.email);
-  const user = await prisma.user.findUnique({ where: { email } });
+  const session = await supabaseSignIn(email, input.password);
 
-  if (!user || user.disabledAt || !(await verifyPassword(input.password, user.passwordHash))) {
+  if (!session.user) {
     return apiError(res, 401, "INVALID_CREDENTIALS", "E-mail ou senha inválidos.");
   }
 
-  const device = await prisma.device.upsert({
-    where: {
-      userId_deviceKey: {
-        userId: user.id,
-        deviceKey: input.deviceKey
-      }
-    },
-    create: {
-      userId: user.id,
-      deviceKey: input.deviceKey,
-      name: input.deviceName,
-      platform: input.platform
-    },
-    update: {
-      name: input.deviceName,
-      platform: input.platform,
-      lastSeenAt: new Date(),
-      revokedAt: null
-    }
-  });
+  const user = await syncSupabaseUser(session.user);
+  if (user.disabledAt) {
+    return apiError(res, 403, "ACCOUNT_DISABLED", "Esta conta está desativada.");
+  }
 
-  const tokens = await issueSession(user.id, device.id);
-  return res.json(await authPayload(user.id, tokens));
+  await upsertDesktopDevice(user.id, input);
+  return res.json(await authPayload(user.id, session));
 });
 
 const RefreshSchema = z.object({
@@ -541,54 +616,43 @@ const RefreshSchema = z.object({
 
 app.post("/v1/auth/refresh", authLimiter, async (req, res) => {
   const input = RefreshSchema.parse(req.body);
-  const oldSession = await prisma.session.findUnique({
-    where: { refreshTokenHash: hashToken(input.refreshToken) },
-    include: { user: true, device: true }
-  });
+  const session = await supabaseRefresh(input.refreshToken);
 
-  if (
-    !oldSession ||
-    oldSession.revokedAt ||
-    oldSession.refreshExpiresAt <= new Date() ||
-    oldSession.user.disabledAt ||
-    oldSession.device?.revokedAt
-  ) {
+  if (!session.user) {
     return apiError(res, 401, "REFRESH_INVALID", "Sessão não pode ser renovada.");
   }
 
-  const accessToken = randomToken(32);
-  const refreshToken = randomToken(48);
-  const now = Date.now();
-  const accessExpiresAt = new Date(now + env.ACCESS_TOKEN_MINUTES * 60_000);
-  const refreshExpiresAt = new Date(now + env.REFRESH_TOKEN_DAYS * 86_400_000);
+  const user = await syncSupabaseUser(session.user);
+  if (user.disabledAt) {
+    return apiError(res, 403, "ACCOUNT_DISABLED", "Esta conta está desativada.");
+  }
 
-  await prisma.session.update({
-    where: { id: oldSession.id },
-    data: {
-      accessTokenHash: hashToken(accessToken),
-      refreshTokenHash: hashToken(refreshToken),
-      accessExpiresAt,
-      refreshExpiresAt,
-      lastSeenAt: new Date()
+  const deviceKey = (req.header("x-mistcut-device-key") || "").trim();
+  if (deviceKey) {
+    const device = await prisma.device.findUnique({
+      where: {
+        userId_deviceKey: {
+          userId: user.id,
+          deviceKey
+        }
+      }
+    });
+    if (device?.revokedAt) {
+      return apiError(res, 401, "DEVICE_REVOKED", "Este dispositivo foi revogado.");
     }
-  });
+  }
 
-  return res.json(
-    await authPayload(oldSession.userId, {
-      sessionId: oldSession.id,
-      accessToken,
-      refreshToken,
-      accessExpiresAt,
-      refreshExpiresAt
-    })
-  );
+  return res.json(await authPayload(user.id, session));
 });
 
 app.post("/v1/auth/logout", authMiddleware, async (req: AuthRequest, res) => {
-  await prisma.session.update({
-    where: { id: req.auth!.sessionId },
-    data: { revokedAt: new Date() }
-  });
+  try {
+    await supabaseSignOut(req.auth!.accessToken);
+  } catch (error) {
+    if (!(error instanceof SupabaseAuthError) || error.status >= 500) {
+      throw error;
+    }
+  }
   return res.json({ success: true });
 });
 
@@ -967,6 +1031,11 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
   if (error instanceof CreditError) {
     const status = error.code === "INSUFFICIENT_CREDITS" ? 402 : 400;
+    return apiError(res, status, error.code, error.message);
+  }
+
+  if (error instanceof SupabaseAuthError) {
+    const status = error.status >= 500 ? 502 : error.status;
     return apiError(res, status, error.code, error.message);
   }
 
