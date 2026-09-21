@@ -76,8 +76,8 @@ class LoginDialog(QDialog):
         layout.addLayout(actions)
 
     def open_register(self) -> None:
-        web_url = os.getenv("MISTCUT_WEB_URL", "http://localhost:3000").rstrip("/")
-        QDesktopServices.openUrl(QUrl(web_url + "/register"))
+        web_url = os.getenv("MISTCUT_WEB_URL", "https://www.mistcut.com").rstrip("/")
+        QDesktopServices.openUrl(QUrl(web_url + "/registro"))
 
     def try_login(self) -> None:
         email = self.email.text().strip()
