@@ -114,6 +114,8 @@ model CreditReservation {
   amount         Int
   settledQuantity Int?
   settledAmount   Int?
+  resultJson      String?
+  failureCode     String?
   status         ReservationStatus @default(RESERVED)
   idempotencyKey String
   description    String?
