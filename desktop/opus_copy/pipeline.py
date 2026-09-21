@@ -18,8 +18,9 @@ from .transcriber import WhisperXTranscriber, save_transcript
 
 
 class Pipeline:
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, cloud=None) -> None:
         self.workspace = workspace
+        self.cloud = cloud
 
     @staticmethod
     def _load_cached_transcript(path: Path) -> dict | None:
@@ -105,7 +106,7 @@ class Pipeline:
                 report(f"Transcrição em cache reutilizada ({language.upper()}).", 50)
 
             report("A IA está avaliando ganchos, retenção, curiosidade e potencial de audiência…", 52)
-            clips = ViralAnalyzer().rank(transcript, max_clips=max_clips)
+            clips = ViralAnalyzer(self.cloud).rank(transcript, max_clips=max_clips)
             if not clips:
                 raise ToolError("A IA não encontrou clips válidos na transcrição.")
 
