@@ -67,7 +67,7 @@ class MistcutCloudClient:
         kernel32 = ctypes.windll.kernel32
         if not crypt32.CryptProtectData(
             ctypes.byref(in_blob),
-            "MISTCUT Session",
+            ctypes.c_wchar_p("MISTCUT Session"),
             None,
             None,
             None,
@@ -228,8 +228,9 @@ class MistcutCloudClient:
             )
             self._accept_session(payload)
             return True
-        except CloudError:
-            self.clear_local_session()
+        except CloudError as exc:
+            if exc.code != "CLOUD_UNAVAILABLE":
+                self.clear_local_session()
             return False
 
     def restore_session(self) -> bool:
